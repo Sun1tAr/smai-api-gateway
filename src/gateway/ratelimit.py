@@ -6,6 +6,7 @@ import os
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -13,69 +14,137 @@ Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 # Ограничиваются только операции, которые запускают дорогую LLM-генерацию.
 LIMITED_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu")})
 UNKNOWN_CLIENT = "unknown"
+GLOBAL_KEY = "*"
+# Доверять можно узкой группе прокси: короткий префикс почти наверняка опечатка.
+MIN_TRUSTED_PREFIX = {4: 8, 6: 32}
 
 
 def parse_networks(value: str) -> tuple[Network, ...]:
-    """CIDR или одиночные адреса через запятую; пусто = доверенных прокси нет."""
-    return tuple(
-        ipaddress.ip_network(part.strip(), strict=False)
-        for part in value.split(",")
-        if part.strip()
-    )
+    """CIDR или одиночные адреса через запятую; пусто = доверенных прокси нет.
+
+    Адрес с битами хоста (`10.1.2.3/8`) и слишком короткий префикс (`/0`) — ошибка,
+    чтобы опечатка не расширяла доверие незаметно.
+    """
+    networks = []
+    for part in value.split(","):
+        if not part.strip():
+            continue
+        network = ipaddress.ip_network(part.strip(), strict=True)
+        if network.prefixlen < MIN_TRUSTED_PREFIX[network.version]:
+            raise ValueError(f"trusted network {network} is too wide")
+        networks.append(network)
+    return tuple(networks)
 
 
 def _parse_ip(raw: str) -> IPAddress | None:
+    """Разбирает адрес из цепочки XFF: допускает порт и `[v6]`, но не zone id."""
+    token = raw.strip()
+    if token.startswith("["):
+        end = token.find("]")
+        if end == -1:
+            return None
+        rest = token[end + 1 :]
+        if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+            return None
+        token = token[1:end]
+    elif token.count(":") == 1:  # a.b.c.d:port
+        token, _, port = token.partition(":")
+        if not port.isdigit():
+            return None
     try:
-        address = ipaddress.ip_address(raw.strip())
+        address = ipaddress.ip_address(token)
     except ValueError:
         return None
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-        return address.ipv4_mapped
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.scope_id:
+            return None
+        if address.ipv4_mapped:
+            return address.ipv4_mapped
     return address
+
+
+@dataclass(frozen=True)
+class ResolvedClient:
+    """Адрес клиента (None, если неизвестен) и причина отката на адрес прокси."""
+
+    ip: str | None
+    fallback: str | None = None  # "no_xff" | "garbage"
 
 
 def resolve_client_ip(
     peer: str | None, forwarded_for: Iterable[str], trusted: tuple[Network, ...]
-) -> str:
+) -> ResolvedClient:
     """Клиент — первый недоверенный адрес справа в цепочке XFF + адрес соседа.
 
     Заголовок читается, только если сокетный сосед доверенный: иначе клиент мог бы
-    подставить любой XFF и обойти лимит или спрятаться за чужим адресом.
+    подставить любой XFF и обойти лимит или спрятаться за чужим адресом. Доверенный
+    прокси обязан дописывать или перезаписывать XFF; `Forwarded` не поддерживается.
     """
     current = _parse_ip(peer) if peer else None
     if current is None:
-        return UNKNOWN_CLIENT
+        return ResolvedClient(None)
     if not trusted or not _is_trusted(current, trusted):
-        return str(current)
-    hops = [token for value in forwarded_for for token in value.split(",")]
+        return ResolvedClient(str(current))
+    hops = [
+        token for value in forwarded_for for token in value.split(",") if token.strip()
+    ]
+    if not hops:
+        return ResolvedClient(str(current), "no_xff")
     for token in reversed(hops):
         candidate = _parse_ip(token)
         # Мусор в цепочке: дальше ей верить нельзя, остаёмся на последнем адресе.
         if candidate is None:
-            return str(current)
+            return ResolvedClient(str(current), "garbage")
         current = candidate
         if not _is_trusted(current, trusted):
             break
-    return str(current)
+    return ResolvedClient(str(current))
 
 
 def _is_trusted(address: IPAddress, trusted: tuple[Network, ...]) -> bool:
     return any(address.version == net.version and address in net for net in trusted)
 
 
-def rate_limit_key(client_ip: str) -> str:
-    """IPv6 группируется по /64: один хост получает целую подсеть адресов."""
-    address = _parse_ip(client_ip) if client_ip != UNKNOWN_CLIENT else None
+def rate_limit_key(client_ip: str | None, ipv6_prefix: int = 56) -> str:
+    """IPv6 группируется по префиксу: у абонента обычно целая сеть /56 или /48."""
+    address = _parse_ip(client_ip) if client_ip else None
     if isinstance(address, ipaddress.IPv6Address):
-        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+        return str(ipaddress.ip_network(f"{address}/{ipv6_prefix}", strict=False))
     return str(address) if address is not None else UNKNOWN_CLIENT
+
+
+@dataclass(frozen=True)
+class Admission:
+    """Итог проверки: `retry_after` — секунды до повтора, None — принято."""
+
+    retry_after: int | None
+    stamp: float = 0.0
+    first_denial: bool = False
+    table_full: bool = False
+
+    @property
+    def allowed(self) -> bool:
+        return self.retry_after is None
+
+
+class _Entry:
+    __slots__ = ("logged_for", "stamps")
+
+    def __init__(self) -> None:
+        self.stamps: deque[float] = deque()
+        self.logged_for: float | None = None
 
 
 class RateLimiter:
     """Скользящий журнал в памяти процесса: не более `requests` попыток за окно.
 
     Корректность держится на одном процессе и отсутствии await между проверкой и
-    записью. Для нескольких реплик лимит умножается (нужен общий Redis).
+    записью, поэтому `check` синхронный, а вызывающая зависимость обязана оставаться
+    `async def` (в threadpool методы начали бы гоняться). Для нескольких реплик лимит
+    умножается (нужен общий Redis); при перезапуске счётчики сбрасываются.
+
+    Переполнение таблицы ключей закрыто, а не открыто: новый ключ отклоняется, пока не
+    истечёт самый давний, вместо вытеснения чужих записей, которое снимало бы лимит.
     """
 
     def __init__(
@@ -90,36 +159,53 @@ class RateLimiter:
         self._window = window_seconds
         self._max_keys = max_keys
         self._clock = clock
-        # Порядок = давность последней попытки: старые ключи всегда в начале.
-        self._log: OrderedDict[str, deque[float]] = OrderedDict()
+        # Порядок = давность последней принятой попытки: старые ключи в начале.
+        self._log: OrderedDict[str, _Entry] = OrderedDict()
         self._secret = os.urandom(16)
 
     @property
     def tracked_keys(self) -> int:
         return len(self._log)
 
-    def check(self, key: str) -> int | None:
-        """None — попытка принята; число — через сколько секунд повторить."""
+    def check(self, key: str) -> Admission:
         now = self._clock()
         self._sweep(now)
-        stamps = self._log.get(key)
-        if stamps is None:
+        entry = self._log.get(key)
+        if entry is None:
             if len(self._log) >= self._max_keys:
-                self._log.popitem(last=False)
-            stamps = self._log[key] = deque()
+                oldest = next(iter(self._log.values())).stamps[-1]
+                wait = math.ceil(oldest + self._window - now)
+                return Admission(wait, table_full=True)
+            entry = self._log[key] = _Entry()
         else:
-            while stamps and stamps[0] <= now - self._window:
-                stamps.popleft()
-        if len(stamps) >= self._requests:
-            return max(1, math.ceil(stamps[0] + self._window - now))
-        stamps.append(now)
+            while entry.stamps and entry.stamps[0] <= now - self._window:
+                entry.stamps.popleft()
+        if len(entry.stamps) >= self._requests:
+            oldest = entry.stamps[0]
+            first = entry.logged_for != oldest
+            entry.logged_for = oldest
+            wait = math.ceil(oldest + self._window - now)
+            return Admission(wait, first_denial=first)
+        entry.stamps.append(now)
         self._log.move_to_end(key)
-        return None
+        return Admission(None, stamp=now)
+
+    def refund(self, key: str, stamp: float) -> None:
+        """Возвращает слот попытке, которая заведомо не дошла до сервиса."""
+        entry = self._log.get(key)
+        if entry is None:
+            return
+        try:
+            entry.stamps.remove(stamp)
+        except ValueError:
+            return
+        if not entry.stamps:
+            del self._log[key]
 
     def _sweep(self, now: float) -> None:
         while self._log:
-            oldest_key, stamps = next(iter(self._log.items()))
-            if stamps and stamps[-1] > now - self._window:
+            oldest_key, entry = next(iter(self._log.items()))
+            if entry.stamps and entry.stamps[-1] > now - self._window:
                 break
             del self._log[oldest_key]
 

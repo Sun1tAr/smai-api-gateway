@@ -1,6 +1,7 @@
 import copy
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -8,13 +9,22 @@ import structlog
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
 
-from gateway.errors import ErrorResponse, InvalidRequestPath, RateLimited
+from gateway.errors import (
+    ErrorResponse,
+    InvalidRequestPath,
+    PayloadTooLarge,
+    RateLimited,
+    UpstreamOverloaded,
+    UpstreamUnavailable,
+)
 from gateway.health import metrics_path_item
 from gateway.policy import client_response_headers, upstream_request_headers
 from gateway.proxy import UpstreamClient, read_limited_body
 from gateway.ratelimit import (
+    GLOBAL_KEY,
     LIMITED_ENDPOINTS,
     RateLimiter,
+    ResolvedClient,
     rate_limit_key,
     resolve_client_ip,
 )
@@ -22,6 +32,13 @@ from gateway.routing import Endpoint, InvalidPath, Route, upstream_target
 
 logger = structlog.get_logger()
 _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
+# Ответы, при которых генерация в MS-4 не начиналась: попытка в лимит не идёт.
+_NOT_REACHED = (
+    InvalidRequestPath,
+    PayloadTooLarge,
+    UpstreamUnavailable,
+    UpstreamOverloaded,
+)
 _PARAM = re.compile(r"\{[a-z][a-z0-9_]*\}")
 
 
@@ -52,10 +69,14 @@ _GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
         None,
     ),
     429: (
-        "Слишком много запросов с одного адреса: превышен лимит "
-        "`RATE_LIMIT_REQUESTS` за `RATE_LIMIT_WINDOW_SECONDS`. Через сколько секунд "
-        "повторить, указано в `Retry-After` и `details.retry_after_seconds`. "
-        "Отклонённые запросы в лимит не засчитываются.",
+        "Слишком много запросов: по умолчанию не более 10 за минуту с одного адреса "
+        "(IPv6 считается по сети) и общий потолок на всех клиентов. Значения "
+        "настраиваются, лимит может быть выключен, тогда ответа 429 не будет. "
+        "Через сколько секунд повторить, "
+        "указано в `Retry-After` и в `details.retry_after_seconds` (целое число ≥ 1). "
+        "В лимит идут все запросы, кроме тех, что не дошли до сервиса: 400, 413, "
+        "502 `connect` и 503 `pool` слот возвращают. Отклонённые запросы "
+        "не засчитываются.",
         "RATE_LIMITED",
         "Too many requests, try again later",
         None,
@@ -167,41 +188,87 @@ def _operation_docs(
     }
 
 
-def request_client_ip(request: Request) -> str:
-    """Адрес клиента с учётом доверенных прокси (TRUSTED_PROXIES)."""
-    return resolve_client_ip(
+def request_client(request: Request) -> ResolvedClient:
+    """Адрес клиента с учётом доверенных прокси; считается один раз на запрос."""
+    cached = getattr(request.state, "client", None)
+    if cached is not None:
+        return cached
+    client = resolve_client_ip(
         request.client.host if request.client else None,
         request.headers.getlist("x-forwarded-for"),
         request.app.state.settings.trusted_networks,
     )
+    if client.fallback is not None:
+        request.app.state.rate_limit_metrics.client_ip_fallback.labels(
+            client.fallback
+        ).inc()
+    request.state.client = client
+    return client
+
+
+def _refund_rate_limit(request: Request) -> None:
+    ticket = getattr(request.state, "rate_ticket", None)
+    if ticket is None:
+        return
+    request.state.rate_ticket = None
+    request.app.state.rate_limiter.refund(ticket.key, ticket.stamp)
+    request.app.state.global_limiter.refund(GLOBAL_KEY, ticket.global_stamp)
+
+
+@dataclass
+class _Ticket:
+    key: str
+    stamp: float
+    global_stamp: float
 
 
 # Вход в проксируемый маршрут: лимит запросов; сюда же встанет проверка пользователя.
+# Должна оставаться async def: в threadpool проверка и запись начали бы гоняться.
 async def edge_guard(request: Request) -> None:
-    limiter: RateLimiter | None = request.app.state.rate_limiter
+    state = request.app.state
+    limiter: RateLimiter | None = state.rate_limiter
     route = request.scope.get("route")
     if limiter is None or (request.method, getattr(route, "path", "")) not in (
         LIMITED_ENDPOINTS
     ):
         return
-    key = rate_limit_key(request_client_ip(request))
-    retry_after = limiter.check(key)
-    if retry_after is None:
-        return
-    request.app.state.rate_limit_metrics.rejected.labels(route.path).inc()
-    logger.warning(
-        "rate_limited",
-        route=route.path,
-        client=limiter.fingerprint(key),
-        retry_after_seconds=retry_after,
-    )
-    raise RateLimited(retry_after)
+    client = request_client(request)
+    key = rate_limit_key(client.ip, state.settings.rate_limit_ipv6_prefix)
+    admission = limiter.check(key)
+    scope = "table_full" if admission.table_full else "client"
+    fingerprint = limiter.fingerprint(key)
+    if admission.allowed:
+        overall = state.global_limiter.check(GLOBAL_KEY)
+        if overall.allowed:
+            request.state.rate_ticket = _Ticket(key, admission.stamp, overall.stamp)
+            return
+        limiter.refund(key, admission.stamp)
+        admission, scope, fingerprint = overall, "global", GLOBAL_KEY
+    state.rate_limit_metrics.rejected.labels(route.path, scope).inc()
+    # Один раз на окно: под атакой строка на каждый 429 удвоила бы поток логов.
+    if admission.first_denial:
+        logger.info(
+            "rate_limited",
+            route=route.path,
+            scope=scope,
+            client=fingerprint,
+            retry_after_seconds=admission.retry_after,
+        )
+    raise RateLimited(admission.retry_after)
 
 
 def _register(
     app: FastAPI, endpoint: Endpoint, docs: dict[str, Any], limit: int
 ) -> None:
     async def handler(request: Request) -> Response:
+        try:
+            return await _proxy(request)
+        except _NOT_REACHED as error:
+            # Запрос заведомо не дошёл до сервиса: слот лимита не тратится.
+            _refund_rate_limit(request)
+            raise error
+
+    async def _proxy(request: Request) -> Response:
         client: UpstreamClient = request.app.state.upstream_client
         raw_path = request.scope.get("raw_path") or request.scope["path"].encode()
         try:
@@ -216,11 +283,10 @@ def _register(
             if endpoint.method in _BODY_METHODS
             else b""
         )
-        request_id = request.state.request_id
         headers = upstream_request_headers(
             request.headers.raw,
-            request_id=request_id,
-            client_ip=request_client_ip(request),
+            request_id=request.state.request_id,
+            client_ip=request_client(request).ip,
             scheme=request.url.scheme,
         )
         upstream = await client.forward(
@@ -253,9 +319,15 @@ def _register(
 def register_routes(
     app: FastAPI, routes: tuple[Route, ...], contract: dict[str, Any], limit: int
 ) -> None:
+    registered = set()
     for route in routes:
         for endpoint in route.endpoints:
             _register(app, endpoint, _operation_docs(endpoint, contract, limit), limit)
+            registered.add((endpoint.method, endpoint.gateway_path))
+    # Переименованный путь иначе тихо остался бы без лимита.
+    missing = LIMITED_ENDPOINTS - registered
+    if missing:
+        raise ContractError(f"rate limited endpoints are not routed: {sorted(missing)}")
 
 
 # 400 из контракта (валидация MS-4) и 400 самого gateway живут рядом как два примера.

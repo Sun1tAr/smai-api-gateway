@@ -24,7 +24,7 @@ from gateway.observability import (
     redact_span,
 )
 from gateway.proxy import UpstreamClient
-from gateway.ratelimit import RateLimiter
+from gateway.ratelimit import LIMITED_ENDPOINTS, RateLimiter
 from gateway.routing import load_routes
 
 logger = structlog.get_logger()
@@ -54,7 +54,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("service_started")
-        if app.state.rate_limiter is not None and not settings.trusted_proxies:
+        if app.state.rate_limiter is not None and not settings.trusted_networks:
             logger.warning("rate_limit_keyed_by_socket_address")
         try:
             yield
@@ -74,8 +74,7 @@ def create_app(
     app.state.settings = settings
     app.state.tracer_provider = provider
     app.state.upstream_client = client
-    app.state.rate_limit_metrics = RateLimitMetrics(registry)
-    app.state.rate_limiter = (
+    limiter = (
         RateLimiter(
             requests=settings.rate_limit_requests,
             window_seconds=settings.rate_limit_window_seconds,
@@ -83,6 +82,21 @@ def create_app(
         )
         if settings.rate_limit_enabled
         else None
+    )
+    app.state.rate_limiter = limiter
+    app.state.global_limiter = RateLimiter(
+        requests=settings.rate_limit_global_requests,
+        window_seconds=settings.rate_limit_window_seconds,
+        max_keys=1,
+    )
+    app.state.rate_limit_metrics = RateLimitMetrics(
+        registry,
+        limited_routes=sorted({path for _, path in LIMITED_ENDPOINTS}),
+        tracked_keys=(
+            (lambda: app.state.rate_limiter.tracked_keys)
+            if limiter is not None
+            else None
+        ),
     )
     register_error_handlers(app)
     app.include_router(health_router)
