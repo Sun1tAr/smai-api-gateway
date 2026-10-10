@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -9,6 +10,7 @@ from gateway.main import create_app
 from gateway.ratelimit import RateLimiter
 from tests.conftest import Recorder
 
+EXAMPLE_ENV = Path(__file__).resolve().parents[2] / ".env.example"
 TASK = "b1e2c3d4-5678-90ab-cdef-1234567890ab"
 POST = "/recipes/generate-menu"
 
@@ -591,7 +593,7 @@ def test_example_env_alone_does_not_start_the_limit(
 ) -> None:
     monkeypatch.delenv("RATE_LIMIT_KEY_BY_SOCKET")
     with pytest.raises(ValidationError, match="TRUSTED_PROXIES"):
-        Settings(_env_file=".env.example")
+        Settings(_env_file=EXAMPLE_ENV)
 
 
 async def test_startup_warns_about_confusing_proxy_settings(

@@ -161,6 +161,9 @@ class RateLimiter:
         self._clock = clock
         # Порядок = давность последней принятой попытки: старые ключи в начале.
         self._log: OrderedDict[str, _Entry] = OrderedDict()
+        # Пока таблица заведомо полна, полный проход по ней не повторяется на каждый
+        # отказ: иначе перебор новых адресов был бы дешёвой нагрузкой на CPU.
+        self._full_until = 0.0
         self._secret = os.urandom(16)
 
     @property
@@ -173,13 +176,15 @@ class RateLimiter:
         entry = self._log.get(key)
         if entry is None:
             if len(self._log) >= self._max_keys:
+                if now < self._full_until:
+                    return Admission(math.ceil(self._full_until - now), table_full=True)
                 # После refund порядок таблицы приблизителен: перед отказом проверяем
                 # все записи (редкий случай), а не только начало очереди.
                 self._sweep_all(now)
             if len(self._log) >= self._max_keys:
                 freed_at = min(e.stamps[-1] for e in self._log.values())
-                wait = math.ceil(freed_at + self._window - now)
-                return Admission(wait, table_full=True)
+                self._full_until = freed_at + self._window
+                return Admission(math.ceil(self._full_until - now), table_full=True)
             entry = self._log[key] = _Entry()
         else:
             while entry.stamps and entry.stamps[0] <= now - self._window:
@@ -203,6 +208,7 @@ class RateLimiter:
             entry.stamps.remove(stamp)
         except ValueError:
             return
+        self._full_until = 0.0  # записи могли истекать раньше, чем считалось
         if not entry.stamps:
             del self._log[key]
 

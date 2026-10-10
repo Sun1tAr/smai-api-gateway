@@ -317,3 +317,35 @@ def test_refund_keeps_table_full_answers_correct() -> None:
     assert first.allowed
     clock.now += 41  # t=1061: у a осталась попытка t=1000, она истекла; b активен
     assert rl.check("c").allowed
+
+
+def test_repeated_table_full_denials_do_not_rescan_the_table() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=1, max_keys=3)
+    for key in "abc":
+        rl.check(key)
+    scans = 0
+    original = rl._sweep_all
+
+    def counting(now: float) -> None:
+        nonlocal scans
+        scans += 1
+        original(now)
+
+    rl._sweep_all = counting  # type: ignore[method-assign]
+    clock.now += 5
+    waits = [rl.check(f"new{n}").retry_after for n in range(100)]
+    assert scans == 1
+    assert set(waits) == {55}
+    clock.now += 56  # a, b, c истекли
+    assert rl.check("late").allowed
+
+
+def test_refund_makes_the_next_table_full_check_rescan() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=2, max_keys=1)
+    first = rl.check("a")
+    clock.now += 10
+    assert rl.check("x").table_full
+    rl.refund("a", first.stamp)  # a опустел и удалён: место свободно
+    assert rl.check("x").allowed
