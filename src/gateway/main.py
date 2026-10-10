@@ -56,6 +56,15 @@ def create_app(
         logger.info("service_started")
         if app.state.rate_limiter is not None and not settings.trusted_networks:
             logger.warning("rate_limit_keyed_by_socket_address")
+        if settings.trusted_networks and settings.rate_limit_key_by_socket:
+            logger.warning("trusted_proxies_override_key_by_socket")
+        wide = [
+            str(net)
+            for net in settings.trusted_networks
+            if net.prefixlen < net.max_prefixlen
+        ]
+        if wide:
+            logger.warning("trusted_proxy_is_a_network", networks=wide)
         try:
             yield
         finally:

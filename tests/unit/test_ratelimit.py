@@ -235,6 +235,8 @@ TRUSTED = parse_networks("10.0.0.0/8, 192.168.1.5")
         ("10.1.1.1", ["203.0.113.9:port"], "10.1.1.1", "garbage"),
         ("10.1.1.1", ["[2001:db8::1"], "10.1.1.1", "garbage"),
         ("10.1.1.1", ["[2001:db8::1]x"], "10.1.1.1", "garbage"),
+        ("10.1.1.1", ["[2001:db8::1]:abc"], "10.1.1.1", "garbage"),
+        ("10.1.1.1", ["[2001:db8::1]:"], "10.1.1.1", "garbage"),
         # zone id и не-ASCII не пропускаем: дальше адрес уходит в заголовок MS-4.
         ("10.1.1.1", ["fe80::1%eth0"], "10.1.1.1", "garbage"),
         ("10.1.1.1", ["fe80::1%é"], "10.1.1.1", "garbage"),
@@ -291,3 +293,27 @@ def test_blank_entries_are_skipped_and_single_addresses_are_accepted() -> None:
         "10.0.0.0/8",
         "192.168.1.5/32",
     ]
+
+
+def test_table_full_wait_uses_the_last_attempt_of_the_earliest_expiring_key() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=2, max_keys=1)
+    rl.check("a")
+    clock.now += 40
+    rl.check("a")  # последняя попытка t=1040, первая t=1000
+    clock.now += 10
+    assert rl.check("b").retry_after == 50  # 1040 + 60 - 1050
+
+
+def test_refund_keeps_table_full_answers_correct() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=2, max_keys=2)
+    first = rl.check("a")  # t=1000
+    clock.now += 10
+    rl.check("b")  # t=1010
+    clock.now += 10
+    second = rl.check("a")  # t=1020: a в конце очереди
+    rl.refund("a", second.stamp)
+    assert first.allowed
+    clock.now += 41  # t=1061: у a осталась попытка t=1000, она истекла; b активен
+    assert rl.check("c").allowed

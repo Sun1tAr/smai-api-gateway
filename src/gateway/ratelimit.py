@@ -173,8 +173,12 @@ class RateLimiter:
         entry = self._log.get(key)
         if entry is None:
             if len(self._log) >= self._max_keys:
-                oldest = next(iter(self._log.values())).stamps[-1]
-                wait = math.ceil(oldest + self._window - now)
+                # После refund порядок таблицы приблизителен: перед отказом проверяем
+                # все записи (редкий случай), а не только начало очереди.
+                self._sweep_all(now)
+            if len(self._log) >= self._max_keys:
+                freed_at = min(e.stamps[-1] for e in self._log.values())
+                wait = math.ceil(freed_at + self._window - now)
                 return Admission(wait, table_full=True)
             entry = self._log[key] = _Entry()
         else:
@@ -208,6 +212,12 @@ class RateLimiter:
             if entry.stamps and entry.stamps[-1] > now - self._window:
                 break
             del self._log[oldest_key]
+
+    def _sweep_all(self, now: float) -> None:
+        for key in [
+            k for k, e in self._log.items() if e.stamps[-1] <= now - self._window
+        ]:
+            del self._log[key]
 
     def fingerprint(self, key: str) -> str:
         """Стабильный в рамках процесса короткий хэш ключа для логов (без адреса)."""

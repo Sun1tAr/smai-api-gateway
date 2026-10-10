@@ -270,10 +270,11 @@ async def test_global_rejection_does_not_burn_the_clients_own_slot(
         client(app, "203.0.113.1") as first,
         client(app, "203.0.113.2") as second,
     ):
-        assert (await first.post(POST, content=b"{}")).status_code == 202
-        assert (await second.post(POST, content=b"{}")).status_code == 429
-        clock.now += 61
-        # Общее окно освободилось, у второго клиента собственный бюджет цел.
+        assert (await first.post(POST, content=b"{}")).status_code == 202  # t=1000
+        clock.now += 30
+        assert (await second.post(POST, content=b"{}")).status_code == 429  # global
+        clock.now += 31  # t=1061: слот первого истёк, общий потолок свободен
+        # Слот второго от t=1030 был бы занят до 1090, если бы не вернулся.
         assert (await second.post(POST, content=b"{}")).status_code == 202
         text = (await second.get("/metrics")).text
     assert 'scope="global"} 1.0' in text
@@ -525,3 +526,89 @@ def test_a_renamed_limited_route_stops_the_start(settings: Settings, tmp_path) -
     )
     with pytest.raises(ContractError, match="not routed"):
         create_app(settings.model_copy(update={"routes_file": routes}))
+
+
+async def test_global_slot_is_returned_with_the_clients_slot(
+    upstream: Recorder,
+) -> None:
+    app = build(upstream, Clock(), rate_limit_global_requests=1)
+    async with (
+        client(app, "203.0.113.1") as first,
+        client(app, "203.0.113.2") as second,
+    ):
+        assert (await first.post(POST, content=b"x" * 70_000)).status_code == 413
+        assert (await second.post(POST, content=b"{}")).status_code == 202
+
+
+async def test_table_full_retry_after_points_at_the_earliest_expiry(
+    upstream: Recorder,
+) -> None:
+    clock = Clock()
+    app = build(upstream, clock, rate_limit_max_keys=2, rate_limit_requests=2)
+    async with client(app, "203.0.113.1") as a, client(app, "203.0.113.2") as b:
+        await a.post(POST, content=b"{}")  # t=1000
+        clock.now += 40
+        await a.post(POST, content=b"{}")  # t=1040: последняя попытка a
+        clock.now += 5
+        await b.post(POST, content=b"{}")  # t=1045
+        clock.now += 5  # t=1050
+        async with client(app, "203.0.113.3") as c:
+            denied = await c.post(POST, content=b"{}")
+    # Самая давняя запись истечёт по её последней попытке: 1040 + 60 - 1050 = 50.
+    assert denied.status_code == 429
+    assert denied.headers["retry-after"] == "50"
+
+
+async def test_refund_does_not_leave_a_dead_key_blocking_a_full_table(
+    upstream: Recorder,
+) -> None:
+    clock = Clock()
+    app = build(upstream, clock, rate_limit_max_keys=2, rate_limit_requests=2)
+    async with client(app, "203.0.113.1") as a, client(app, "203.0.113.2") as b:
+        await a.post(POST, content=b"{}")  # t=1000
+        clock.now += 10
+        await b.post(POST, content=b"{}")  # t=1010
+        clock.now += 10
+        # Принят и возвращён: у a остаётся только попытка t=1000, но ключ уже в конце.
+        assert (await a.post(POST, content=b"x" * 70_000)).status_code == 413
+        clock.now += 41  # t=1061: попытка a истекла, b ещё активен
+        async with client(app, "203.0.113.3") as c:
+            assert (await c.post(POST, content=b"{}")).status_code == 202
+
+
+async def test_client_is_resolved_and_counted_once_per_request(
+    upstream: Recorder,
+) -> None:
+    app = build(upstream, trusted_proxies="10.0.0.0/8")
+    async with client(app, "10.1.1.1") as proxy:
+        await proxy.post(POST, content=b"{}")  # без XFF: откат на адрес прокси
+        text = (await proxy.get("/metrics")).text
+    assert 'gateway_client_ip_fallback_total{reason="no_xff"} 1.0' in text
+
+
+def test_example_env_alone_does_not_start_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RATE_LIMIT_KEY_BY_SOCKET")
+    with pytest.raises(ValidationError, match="TRUSTED_PROXIES"):
+        Settings(_env_file=".env.example")
+
+
+async def test_startup_warns_about_confusing_proxy_settings(
+    upstream: Recorder, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = build(
+        upstream,
+        trusted_proxies="10.0.0.0/8,192.168.1.5",
+        rate_limit_key_by_socket=True,
+    )
+    async with app.router.lifespan_context(app):
+        pass
+    output = capsys.readouterr().out
+    assert "trusted_proxies_override_key_by_socket" in output
+    event = next(
+        json.loads(line)
+        for line in output.splitlines()
+        if "trusted_proxy_is_a_network" in line
+    )
+    assert event["networks"] == ["10.0.0.0/8"]

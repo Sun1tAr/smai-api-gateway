@@ -35,7 +35,7 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
-| 429 | `RATE_LIMITED` | только `POST /recipes/generate-menu`: превышен лимит запросов с одного адреса; заголовок `Retry-After`, `details.retry_after_seconds` |
+| 429 | `RATE_LIMITED` | только `POST /recipes/generate-menu`: превышен лимит с одного адреса или общий потолок; заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
 | 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
@@ -48,13 +48,14 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 
 ## Локальный запуск
 
-Нужен Docker Compose ≥ 2.24 (`env_file` с `required: false`).
-
-Нужны Docker и Docker Compose. Общая сеть для сервисов контура создаётся один раз:
+Нужны Docker и Docker Compose ≥ 2.24 (`env_file` с `required: false`). Общая сеть
+для сервисов контура создаётся один раз:
 
 ```sh
 docker network create smai
 cp .env.example .env
+# Локально прокси нет: ключ лимита — адрес сокета. На stage/prod так не делать.
+echo 'RATE_LIMIT_KEY_BY_SOCKET=true' >> .env
 docker compose --profile stub up --build --wait   # gateway + заглушка MS-4
 curl --fail http://127.0.0.1:8080/health
 curl -i -X POST http://127.0.0.1:8080/recipes/generate-menu \
@@ -121,8 +122,8 @@ curl --fail http://127.0.0.1:8080/metrics
   `X-Forwarded-For` для MS-4 — адрес клиента: по умолчанию адрес сокетного соседа
   (за NetBird это адрес его reverse proxy), а при заданных `TRUSTED_PROXIES` —
   клиент из цепочки (см. «Лимит запросов»). uvicorn запущен с `--no-proxy-headers`,
-  поэтому клиентские `X-Forwarded-*` на этот адрес не влияют, пока сосед не доверенный. Заголовок `Server`
-  не отдаётся (`--no-server-header`). `X-Forwarded-Proto` в MS-4 всегда `http`,
+  поэтому клиентские `X-Forwarded-*` на этот адрес не влияют, пока сосед не
+  доверенный. Заголовок `Server` не отдаётся (`--no-server-header`). `X-Forwarded-Proto` в MS-4 всегда `http`,
   даже если снаружи был TLS.
 - Тело запроса читается и пересылается только у методов с телом (POST); у GET оно
   отбрасывается. Тело POST больше `MAX_REQUEST_BODY_BYTES` получает 413.
@@ -172,8 +173,10 @@ curl --fail http://127.0.0.1:8080/metrics
   CGNAT делят адрес и могут получать ложные 429, поэтому есть выключатель.
 - Метрики без адресов: `gateway_rate_limited_total{route,scope}` (`scope` =
   `client`, `global`, `table_full`), `gateway_rate_limit_tracked_keys`,
-  `gateway_client_ip_fallback_total{reason}`. В логе событие `rate_limited` один раз
-  за окно на ключ, с коротким HMAC-хэшем вместо адреса.
+  `gateway_client_ip_fallback_total{reason}`. В логе событие `rate_limited` пишется
+  на каждую новую «самую старую попытку» ключа (не на каждый 429, поэтому под атакой
+  не больше числа слотов окна), с коротким HMAC-хэшем вместо адреса. Отказы
+  `table_full` в лог не пишутся, они видны только в метрике.
 - Клиент (Android) должен обрабатывать 429 и не повторять запрос раньше `Retry-After`.
   Коды `RATE_LIMITED` (429), `PAYLOAD_TOO_LARGE` (413), `METHOD_NOT_ALLOWED` (405) и
   504 нужно добавить в TDR-4.
@@ -198,16 +201,37 @@ curl --fail http://127.0.0.1:8080/metrics
 3. Нужно знать, какой адрес gateway видит у соседа на самом деле. Порт опубликован как
    `127.0.0.1:8080:8000`; при userland-proxy Docker сосед выглядит как шлюз bridge-сети
    (`172.x.0.1`), а не как NetBird proxy. Адрес проверяют так: временно запустить с
-   `RATE_LIMIT_KEY_BY_SOCKET=true` и посмотреть `docker compose exec gateway ss -tn`.
+   `RATE_LIMIT_KEY_BY_SOCKET=true` и вывести адреса соединений к порту 8000 (в образе
+   нет `ss`, поэтому через `/proc/net/tcp`, где `1F40` = порт 8000, `01` = ESTABLISHED):
+
+   ```sh
+   docker compose exec gateway python -c "import socket,struct;[print(socket.inet_ntoa(struct.pack('<I',int(r.split()[2].split(':')[0],16)))) for r in open('/proc/net/tcp').readlines()[1:] if r.split()[1].endswith(':1F40') and r.split()[3]=='01']"
+   ```
 
 Валидация при старте: `/0` и префиксы короче `/8` (IPv4) и `/32` (IPv6) отклоняются,
 адрес с битами хоста (`10.1.2.3/8`) — тоже: опечатка не должна молча расширять
 доверие. Пробельное значение `" , "` не считается заданным.
 
-**Чек-лист выкатки на stage:** узнать фактический адрес соседа (NetBird Reverse
-Proxy), записать в секрет `TRUSTED_PROXIES` его `/32`, убедиться, что прокси
-перезаписывает `X-Forwarded-For`, проверить два запроса с разных клиентов (разные
-`gateway_rate_limit_tracked_keys`), смотреть `gateway_client_ip_fallback_total`.
+**Порядок выкатки на stage.** После мержа gateway **не стартует**, пока в секрете
+контура нет режима ключа:
+
+1. До мержа DevOps (Sun1tAr) добавляет в секрет `RATE_LIMIT_ENABLED=false`.
+2. Узнать фактический адрес соседа (NetBird Reverse Proxy, команда выше), убедиться,
+   что прокси перезаписывает `X-Forwarded-For`.
+3. Заменить в секрете на `TRUSTED_PROXIES=<адрес>/32` и `RATE_LIMIT_ENABLED=true`.
+4. Проверить два запроса с разных клиентов: растёт `gateway_rate_limit_tracked_keys`
+   на две записи; следить за `gateway_client_ip_fallback_total` (рост = клиенты слиплись).
+
+### Компромисс общего потолка
+
+Общий потолок защищает бюджет LLM, но им можно управлять: 10 активных клиентов (или
+10 подсетей /56 одной сети /48) по 10 запросов исчерпывают 100 запросов за окно, и все
+остальные получают 429 `global` с `Retry-After`. Это осознанный выбор в пользу
+стоимости генерации против доступности; значения 100 на всех и 10 на клиента нужно
+подтвердить. Алерт: `increase(gateway_rate_limited_total{scope="global"}[5m]) > 0`.
+`table_full` при значениях по умолчанию недостижим (общий потолок принимает не более
+100 новых клиентов за окно, а таблица на 10000), он нужен как страховка при больших
+`RATE_LIMIT_GLOBAL_REQUESTS`.
 
 ## Наблюдаемость
 

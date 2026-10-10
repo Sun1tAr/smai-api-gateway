@@ -74,9 +74,9 @@ _GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
         "настраиваются, лимит может быть выключен, тогда ответа 429 не будет. "
         "Через сколько секунд повторить, "
         "указано в `Retry-After` и в `details.retry_after_seconds` (целое число ≥ 1). "
-        "В лимит идут все запросы, кроме тех, что не дошли до сервиса: 400, 413, "
-        "502 `connect` и 503 `pool` слот возвращают. Отклонённые запросы "
-        "не засчитываются.",
+        "В лимит идут все запросы, кроме тех, что не дошли до сервиса: 400 самого "
+        "gateway (небезопасный путь), 413, 502 `connect` и 503 `pool` слот "
+        "возвращают. Отклонённые запросы не засчитываются.",
         "RATE_LIMITED",
         "Too many requests, try again later",
         None,
@@ -245,7 +245,8 @@ async def edge_guard(request: Request) -> None:
         limiter.refund(key, admission.stamp)
         admission, scope, fingerprint = overall, "global", GLOBAL_KEY
     state.rate_limit_metrics.rejected.labels(route.path, scope).inc()
-    # Один раз на окно: под атакой строка на каждый 429 удвоила бы поток логов.
+    # Строка на каждую новую «самую старую попытку», а не на каждый 429: под атакой
+    # поток логов ограничен числом слотов окна. Отказы table_full есть лишь в метрике.
     if admission.first_denial:
         logger.info(
             "rate_limited",
@@ -263,10 +264,10 @@ def _register(
     async def handler(request: Request) -> Response:
         try:
             return await _proxy(request)
-        except _NOT_REACHED as error:
+        except _NOT_REACHED:
             # Запрос заведомо не дошёл до сервиса: слот лимита не тратится.
             _refund_rate_limit(request)
-            raise error
+            raise
 
     async def _proxy(request: Request) -> Response:
         client: UpstreamClient = request.app.state.upstream_client
