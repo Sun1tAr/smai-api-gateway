@@ -1,0 +1,138 @@
+import asyncio
+from dataclasses import dataclass
+
+import httpx
+from fastapi import Request
+
+from gateway.config import Settings
+from gateway.errors import (
+    PayloadTooLarge,
+    UpstreamFailure,
+    UpstreamOverloaded,
+    UpstreamProtocolError,
+    UpstreamResponseTooLarge,
+    UpstreamTimeout,
+    UpstreamUnavailable,
+)
+from gateway.policy import Headers
+
+
+@dataclass(frozen=True)
+class UpstreamResponse:
+    status_code: int
+    headers: Headers
+    body: bytes
+
+
+# Тело буферизуется: ретраев нет, а размер можно проверить до отправки в MS-4.
+async def read_limited_body(request: Request, limit: int) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        raise PayloadTooLarge({"max_bytes": limit})
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise PayloadTooLarge({"max_bytes": limit})
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+class UpstreamClient:
+    """Единственный HTTP-клиент gateway к бизнес-сервисам."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        upstreams: dict[str, str],
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._upstreams = upstreams
+        self._max_response_bytes = settings.upstream_max_response_bytes
+        self._total_timeout = settings.upstream_total_timeout_seconds
+        if transport is None:
+            # retries повторяет только ошибки установки соединения: запрос не ушёл.
+            transport = httpx.AsyncHTTPTransport(
+                retries=1,
+                limits=httpx.Limits(
+                    max_connections=settings.upstream_max_connections,
+                    max_keepalive_connections=min(
+                        settings.upstream_max_connections, 20
+                    ),
+                    keepalive_expiry=settings.upstream_keepalive_expiry_seconds,
+                ),
+            )
+        self._client = httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(
+                connect=settings.upstream_connect_timeout_seconds,
+                read=settings.upstream_read_timeout_seconds,
+                write=settings.upstream_write_timeout_seconds,
+                pool=settings.upstream_pool_timeout_seconds,
+            ),
+            trust_env=False,
+            follow_redirects=False,
+            http2=False,
+        )
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        return self._client
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def forward(
+        self,
+        *,
+        upstream: str,
+        method: str,
+        target: bytes,
+        headers: Headers,
+        body: bytes,
+    ) -> UpstreamResponse:
+        url = httpx.URL(self._upstreams[upstream]).copy_with(raw_path=target)
+        outgoing = list(headers)
+        # Иначе httpx сам запросит gzip, а клиент получит сжатое тело без запроса.
+        if not any(name.lower() == b"accept-encoding" for name, _ in outgoing):
+            outgoing.append((b"accept-encoding", b"identity"))
+        request = self._client.build_request(
+            method, url, headers=outgoing, content=body or None
+        )
+        try:
+            async with asyncio.timeout(self._total_timeout):
+                return await self._send(request, upstream)
+        except UpstreamFailure:
+            raise
+        except httpx.PoolTimeout:
+            raise UpstreamOverloaded(upstream) from None
+        except (httpx.ConnectTimeout, httpx.ConnectError):
+            raise UpstreamUnavailable(upstream) from None
+        except (httpx.TimeoutException, TimeoutError):
+            raise UpstreamTimeout(upstream) from None
+        except httpx.TransportError:
+            raise UpstreamProtocolError(upstream) from None
+
+    async def _send(self, request: httpx.Request, upstream: str) -> UpstreamResponse:
+        response = await self._client.send(request, stream=True)
+        try:
+            declared = response.headers.get("content-length")
+            if declared is not None and declared.isdigit():
+                if int(declared) > self._max_response_bytes:
+                    raise UpstreamResponseTooLarge(upstream)
+            chunks: list[bytes] = []
+            size = 0
+            # aiter_raw отдаёт байты как есть, поэтому content-encoding остаётся верным.
+            async for chunk in response.aiter_raw():
+                size += len(chunk)
+                if size > self._max_response_bytes:
+                    raise UpstreamResponseTooLarge(upstream)
+                chunks.append(chunk)
+        finally:
+            await response.aclose()
+        return UpstreamResponse(
+            status_code=response.status_code,
+            headers=list(response.headers.raw),
+            body=b"".join(chunks),
+        )
