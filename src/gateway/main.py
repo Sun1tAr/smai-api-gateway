@@ -80,11 +80,11 @@ def create_app(
         registry=registry,
         should_group_status_codes=False,
         should_ignore_untemplated=True,
-    ).instrument(app).expose(app, include_in_schema=True, tags=["service"])
+    ).instrument(app).expose(app, include_in_schema=False)
     FastAPIInstrumentor.instrument_app(
         app,
         tracer_provider=provider,
-        excluded_urls="health,metrics",
+        excluded_urls="^https?://[^/]+/health$,^https?://[^/]+/metrics$",
         server_request_hook=redact_span,
     )
     # Снаружи всего стека, включая OTel: клиентский traceparent в трейс не попадает.

@@ -316,3 +316,18 @@ async def test_lifespan_closes_the_upstream_client(
     async with app.router.lifespan_context(app):
         assert not app.state.upstream_client.client.is_closed
     assert app.state.upstream_client.client.is_closed
+
+
+async def test_only_the_exact_service_paths_are_excluded_from_tracing(
+    settings: Settings, upstream: Recorder
+) -> None:
+    app = create_app(settings, transport=httpx.MockTransport(upstream))
+    exporter = InMemorySpanExporter()
+    app.state.tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    async with client_for(app) as client:
+        await client.get("/recipes/generate-menu/health")
+    spans = exporter.get_finished_spans()
+    server = next(s for s in spans if s.kind == SpanKind.SERVER)
+    client_span = next(s for s in spans if s.kind == SpanKind.CLIENT)
+    assert server.parent is None
+    assert client_span.context.trace_id == server.context.trace_id

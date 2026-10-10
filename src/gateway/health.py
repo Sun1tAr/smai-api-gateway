@@ -45,3 +45,46 @@ class HealthResponse(BaseModel):
 )
 async def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+_METRICS_EXAMPLE = (
+    "# HELP gateway_upstream_up 1, если последний запрос к сервису дошёл до него\n"
+    "# TYPE gateway_upstream_up gauge\n"
+    'gateway_upstream_up{upstream="recipes"} 1.0\n'
+)
+
+
+# /metrics отдаёт библиотека prometheus, поэтому описание добавляется в схему отдельно.
+def metrics_path_item() -> dict:
+    return {
+        "get": {
+            "tags": ["service"],
+            "summary": "Метрики Prometheus",
+            "description": (
+                "Метрики gateway в текстовом формате Prometheus: HTTP-метрики по "
+                "шаблону пути и `gateway_upstream_*`. Не пробрасывать наружу."
+            ),
+            "operationId": "get_metrics",
+            "responses": {
+                "200": {
+                    "description": "Метрики в формате Prometheus.",
+                    "content": {"text/plain": {"example": _METRICS_EXAMPLE}},
+                },
+                "500": {
+                    "description": "Необработанная ошибка gateway.",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                            "example": {
+                                "error": {
+                                    "code": "INTERNAL_ERROR",
+                                    "message": "Internal server error",
+                                    "details": {},
+                                }
+                            },
+                        }
+                    },
+                },
+            },
+        }
+    }

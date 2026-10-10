@@ -146,3 +146,13 @@ def test_incomplete_contract_stops_the_start(
     file.write_text(json.dumps(contract), "utf-8")
     with pytest.raises(ContractError):
         create_app(settings.model_copy(update={"contract_file": file}))
+
+
+def test_service_endpoints_are_documented_with_examples(schema: dict) -> None:
+    metrics = schema["paths"]["/metrics"]["get"]["responses"]
+    assert "text/plain" in metrics["200"]["content"]
+    assert "gateway_upstream_up" in metrics["200"]["content"]["text/plain"]["example"]
+    for path in ("/health", "/metrics"):
+        responses = schema["paths"][path]["get"]["responses"]
+        assert set(responses) >= {"200", "500"}
+        assert "example" in responses["500"]["content"]["application/json"]

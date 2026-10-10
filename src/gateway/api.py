@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
 
 from gateway.errors import ErrorResponse, InvalidRequestPath
+from gateway.health import metrics_path_item
 from gateway.policy import client_response_headers, upstream_request_headers
 from gateway.proxy import UpstreamClient, read_limited_body
 from gateway.routing import Endpoint, InvalidPath, Route, upstream_target
@@ -64,22 +65,22 @@ _GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
 }
 
 
-def _gateway_example(status: int, upstream: str) -> dict[str, Any]:
+def _gateway_example(status: int, upstream: str, limit: int = 65536) -> dict[str, Any]:
     _, code, message, reason = _GATEWAY_ERRORS[status]
     details: dict[str, Any] = {}
     if reason is not None:
         details = {"upstream": upstream, "reason": reason}
     elif status == 413:
-        details = {"max_bytes": 65536}
+        details = {"max_bytes": limit}
     return {"error": {"code": code, "message": message, "details": details}}
 
 
-def _gateway_response(status: int, upstream: str) -> dict[str, Any]:
+def _gateway_response(status: int, upstream: str, limit: int) -> dict[str, Any]:
     return {
         "model": ErrorResponse,
         "description": _GATEWAY_ERRORS[status][0],
         "content": {
-            "application/json": {"example": _gateway_example(status, upstream)}
+            "application/json": {"example": _gateway_example(status, upstream, limit)}
         },
     }
 
@@ -93,7 +94,9 @@ def _contract_response(where: str, status: str, response: Any) -> dict[str, Any]
     return response
 
 
-def _operation_docs(endpoint: Endpoint, contract: dict[str, Any]) -> dict[str, Any]:
+def _operation_docs(
+    endpoint: Endpoint, contract: dict[str, Any], limit: int = 65536
+) -> dict[str, Any]:
     where = f"{endpoint.method} {endpoint.upstream_path}"
     try:
         operation = contract["paths"][endpoint.upstream_path][endpoint.method.lower()]
@@ -106,7 +109,7 @@ def _operation_docs(endpoint: Endpoint, contract: dict[str, Any]) -> dict[str, A
     for status in sorted(_GATEWAY_ERRORS):
         if status == 413 and endpoint.method not in _BODY_METHODS:
             continue
-        responses[status] = _gateway_response(status, endpoint.upstream)
+        responses[status] = _gateway_response(status, endpoint.upstream, limit)
     # Ответы MS-4 описывают его собственные ошибки и перекрывают общие.
     for status, response in operation["responses"].items():
         response = dict(_contract_response(where, status, response))
@@ -194,7 +197,7 @@ def register_routes(
 ) -> None:
     for route in routes:
         for endpoint in route.endpoints:
-            _register(app, endpoint, _operation_docs(endpoint, contract), limit)
+            _register(app, endpoint, _operation_docs(endpoint, contract, limit), limit)
 
 
 # 400 из контракта (валидация MS-4) и 400 самого gateway живут рядом как два примера.
@@ -238,6 +241,7 @@ def install_openapi(
                         target["responses"][status]["content"] = content
                     if "requestBody" in source:
                         target["requestBody"] = copy.deepcopy(source["requestBody"])
+            schema["paths"]["/metrics"] = metrics_path_item()
             app.openapi_schema = schema
         return app.openapi_schema
 

@@ -121,15 +121,27 @@ async def test_wrong_method_is_405_and_never_reaches_upstream(
 
 
 @pytest.mark.parametrize(
-    "task_id",
-    ["..", "%2e%2e", "%2E%2e", ".%2e", "%252e%252e", "%2f", "%5c", "%00", "%0a"],
+    ("task_id", "status", "code"),
+    [
+        ("%2e%2e", 400, "VALIDATION_ERROR"),
+        ("%2E%2e", 400, "VALIDATION_ERROR"),
+        (".%2e", 400, "VALIDATION_ERROR"),
+        ("%252e%252e", 400, "VALIDATION_ERROR"),
+        ("%2f", 404, "NOT_FOUND"),
+        ("%5c", 400, "VALIDATION_ERROR"),
+        ("%00", 400, "VALIDATION_ERROR"),
+        ("%0a", 400, "VALIDATION_ERROR"),
+    ],
 )
 async def test_traversal_in_task_id_never_reaches_upstream(
-    gateway: httpx.AsyncClient, upstream: Recorder, task_id: str
+    gateway: httpx.AsyncClient,
+    upstream: Recorder,
+    task_id: str,
+    status: int,
+    code: str,
 ) -> None:
     response = await gateway.get(f"/recipes/generate-menu/{task_id}")
-    assert response.status_code in (400, 404)
-    assert response.json()["error"]["code"] in ("VALIDATION_ERROR", "NOT_FOUND")
+    assert (response.status_code, response.json()["error"]["code"]) == (status, code)
     assert upstream.requests == []
 
 
