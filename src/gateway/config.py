@@ -46,3 +46,11 @@ class Settings(BaseSettings):
     def upstream_url(self, name: str) -> str | None:
         value = getattr(self, f"upstream_{name}_url", None)
         return None if value is None else str(value).rstrip("/")
+
+    def upstream_urls(self) -> dict[str, str]:
+        names = (
+            field.removeprefix("upstream_").removesuffix("_url")
+            for field in type(self).model_fields
+            if field.startswith("upstream_") and field.endswith("_url")
+        )
+        return {name: url for name in names if (url := self.upstream_url(name))}

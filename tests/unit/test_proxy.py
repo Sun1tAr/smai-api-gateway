@@ -14,26 +14,9 @@ from gateway.errors import (
     UpstreamUnavailable,
 )
 from gateway.proxy import UpstreamClient
+from tests.conftest import reply
 
 Handler = Callable[[httpx.Request], httpx.Response]
-
-
-class Chunks(httpx.AsyncByteStream):
-    def __init__(self, *chunks: bytes) -> None:
-        self._chunks = chunks
-
-    async def __aiter__(self):
-        for chunk in self._chunks:
-            yield chunk
-
-
-# Тело отдаётся потоком, как по сети: ответ не прочитан заранее и не декодирован.
-def reply(
-    status: int = 200,
-    *chunks: bytes,
-    headers: dict[str, str] | None = None,
-) -> httpx.Response:
-    return httpx.Response(status, headers=headers, stream=Chunks(*chunks))
 
 
 def make_client(handler: Handler, **overrides: object) -> UpstreamClient:
