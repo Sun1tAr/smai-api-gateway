@@ -181,7 +181,7 @@ async def test_client_trust_headers_are_not_forwarded(
             "X-Forwarded-Host": "evil",
             "X-Real-IP": "6.6.6.6",
             "Forwarded": "for=6.6.6.6",
-            "X-Request-ID": "client",
+            "X-Request-ID": "client id",
             "X-User-Id": "admin",
             "Cookie": "s=1",
             "Traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
@@ -191,7 +191,7 @@ async def test_client_trust_headers_are_not_forwarded(
     sent = upstream.requests[0].headers
     assert sent["x-forwarded-for"] == "127.0.0.1"
     assert sent["x-forwarded-proto"] == "http"
-    assert sent["x-request-id"] != "client"
+    assert sent["x-request-id"] != "client id"
     assert sent["accept"] == "application/json"
     for name in ("x-forwarded-host", "x-real-ip", "forwarded", "x-user-id", "cookie"):
         assert name not in sent

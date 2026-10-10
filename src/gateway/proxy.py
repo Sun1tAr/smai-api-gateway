@@ -1,7 +1,9 @@
 import asyncio
+import time
 from dataclasses import dataclass
 
 import httpx
+import structlog
 from fastapi import Request
 
 from gateway.config import Settings
@@ -14,7 +16,10 @@ from gateway.errors import (
     UpstreamTimeout,
     UpstreamUnavailable,
 )
+from gateway.metrics import UpstreamMetrics
 from gateway.policy import Headers
+
+logger = structlog.get_logger()
 
 
 @dataclass(frozen=True)
@@ -47,7 +52,9 @@ class UpstreamClient:
         settings: Settings,
         upstreams: dict[str, str],
         transport: httpx.AsyncBaseTransport | None = None,
+        metrics: UpstreamMetrics | None = None,
     ) -> None:
+        self._metrics = metrics
         self._upstreams = upstreams
         self._max_response_bytes = settings.upstream_max_response_bytes
         self._total_timeout = settings.upstream_total_timeout_seconds
@@ -86,6 +93,66 @@ class UpstreamClient:
     async def forward(
         self,
         *,
+        upstream: str,
+        method: str,
+        route: str,
+        target: bytes,
+        headers: Headers,
+        body: bytes,
+    ) -> UpstreamResponse:
+        started = time.perf_counter()
+        try:
+            response = await self._forward(upstream, method, target, headers, body)
+        except UpstreamFailure as failure:
+            self._record_failure(upstream, route, failure, started)
+            raise
+        self._record_response(upstream, route, method, response, started)
+        return response
+
+    def _record_response(
+        self,
+        upstream: str,
+        route: str,
+        method: str,
+        response: UpstreamResponse,
+        started: float,
+    ) -> None:
+        elapsed = time.perf_counter() - started
+        if self._metrics is not None:
+            self._metrics.requests.labels(
+                upstream, route, method, str(response.status_code)
+            ).inc()
+            self._metrics.duration.labels(upstream, route).observe(elapsed)
+            self._metrics.up.labels(upstream).set(1)
+        logger.info(
+            "upstream_request",
+            upstream=upstream,
+            method=method,
+            route=route,
+            status_code=response.status_code,
+            duration_seconds=round(elapsed, 6),
+        )
+
+    def _record_failure(
+        self, upstream: str, route: str, failure: UpstreamFailure, started: float
+    ) -> None:
+        elapsed = time.perf_counter() - started
+        if self._metrics is not None:
+            self._metrics.errors.labels(upstream, failure.reason).inc()
+            self._metrics.duration.labels(upstream, route).observe(elapsed)
+            # Перегрузка пула говорит о самом gateway, а не о недоступности сервиса.
+            if failure.reason != "pool":
+                self._metrics.up.labels(upstream).set(0)
+        logger.warning(
+            "upstream_request_failed",
+            upstream=upstream,
+            route=route,
+            reason=failure.reason,
+            duration_seconds=round(elapsed, 6),
+        )
+
+    async def _forward(
+        self,
         upstream: str,
         method: str,
         target: bytes,

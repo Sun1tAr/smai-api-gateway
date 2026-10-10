@@ -3,7 +3,6 @@ import json
 import re
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
@@ -123,7 +122,7 @@ def _register(
         except InvalidPath:
             raise InvalidRequestPath() from None
         body = await read_limited_body(request, limit)
-        request_id = getattr(request.state, "request_id", None) or str(uuid4())
+        request_id = request.state.request_id
         headers = upstream_request_headers(
             request.headers.raw,
             request_id=request_id,
@@ -133,6 +132,7 @@ def _register(
         upstream = await client.forward(
             upstream=endpoint.upstream,
             method=endpoint.method,
+            route=endpoint.gateway_path,
             target=target,
             headers=headers,
             body=body,

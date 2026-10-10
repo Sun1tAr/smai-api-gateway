@@ -34,6 +34,7 @@ async def forward(client: UpstreamClient, **kwargs: object):
     options = {
         "upstream": "recipes",
         "method": "GET",
+        "route": "/recipes/generate-menu/{task_id}",
         "target": b"/generate-menu/x",
         "headers": [],
         "body": b"",

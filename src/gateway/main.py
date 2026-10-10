@@ -4,12 +4,19 @@ from contextlib import asynccontextmanager
 import httpx
 import structlog
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from prometheus_client import CollectorRegistry
+from prometheus_fastapi_instrumentator import Instrumentator
+from starlette.types import ASGIApp
 
 from gateway import __version__
 from gateway.api import install_openapi, load_contract, register_routes
+from gateway.asgi import RequestContextMiddleware, StripTraceContext
 from gateway.config import Settings
 from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
+from gateway.metrics import UpstreamMetrics
 from gateway.observability import configure_logging, create_tracer_provider
 from gateway.proxy import UpstreamClient
 from gateway.routing import load_routes
@@ -28,7 +35,11 @@ def create_app(
     upstreams = settings.upstream_urls()
     routes = load_routes(settings.routes_file, upstreams)
     contract = load_contract(settings.contract_file)
-    client = UpstreamClient(settings, upstreams, transport=transport)
+    registry = CollectorRegistry()
+    client = UpstreamClient(
+        settings, upstreams, transport=transport, metrics=UpstreamMetrics(registry)
+    )
+    HTTPXClientInstrumentor.instrument_client(client.client, tracer_provider=provider)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -36,6 +47,7 @@ def create_app(
         try:
             yield
         finally:
+            HTTPXClientInstrumentor.uninstrument_client(client.client)
             await client.aclose()
             provider.shutdown()
             logger.info("service_stopped")
@@ -54,4 +66,18 @@ def create_app(
     app.include_router(health_router)
     register_routes(app, routes, contract, settings.max_request_body_bytes)
     install_openapi(app, routes, contract)
+    app.add_middleware(RequestContextMiddleware)
+    Instrumentator(
+        registry=registry,
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+    ).instrument(app).expose(app, include_in_schema=False)
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+    # Снаружи всего стека, включая OTel: клиентский traceparent в трейс не попадает.
+    build_stack = app.build_middleware_stack
+
+    def build_with_trace_reset() -> ASGIApp:
+        return StripTraceContext(build_stack())
+
+    app.build_middleware_stack = build_with_trace_reset
     return app
