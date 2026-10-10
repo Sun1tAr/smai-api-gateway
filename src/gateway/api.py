@@ -4,15 +4,23 @@ import re
 from pathlib import Path
 from typing import Any
 
+import structlog
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
 
-from gateway.errors import ErrorResponse, InvalidRequestPath
+from gateway.errors import ErrorResponse, InvalidRequestPath, RateLimited
 from gateway.health import metrics_path_item
 from gateway.policy import client_response_headers, upstream_request_headers
 from gateway.proxy import UpstreamClient, read_limited_body
+from gateway.ratelimit import (
+    LIMITED_ENDPOINTS,
+    RateLimiter,
+    rate_limit_key,
+    resolve_client_ip,
+)
 from gateway.routing import Endpoint, InvalidPath, Route, upstream_target
 
+logger = structlog.get_logger()
 _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 _PARAM = re.compile(r"\{[a-z][a-z0-9_]*\}")
 
@@ -41,6 +49,15 @@ _GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
         "Тело запроса больше `MAX_REQUEST_BODY_BYTES`.",
         "PAYLOAD_TOO_LARGE",
         "Request body is too large",
+        None,
+    ),
+    429: (
+        "Слишком много запросов с одного адреса: превышен лимит "
+        "`RATE_LIMIT_REQUESTS` за `RATE_LIMIT_WINDOW_SECONDS`. Через сколько секунд "
+        "повторить, указано в `Retry-After` и `details.retry_after_seconds`. "
+        "Отклонённые запросы в лимит не засчитываются.",
+        "RATE_LIMITED",
+        "Too many requests, try again later",
         None,
     ),
     502: (
@@ -72,11 +89,22 @@ def _gateway_example(status: int, upstream: str, limit: int = 65536) -> dict[str
         details = {"upstream": upstream, "reason": reason}
     elif status == 413:
         details = {"max_bytes": limit}
+    elif status == 429:
+        details = {"retry_after_seconds": 30}
     return {"error": {"code": code, "message": message, "details": details}}
 
 
 def _gateway_response(status: int, upstream: str, limit: int) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    if status == 429:
+        extra["headers"] = {
+            "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {"type": "integer", "minimum": 1},
+            }
+        }
     return {
+        **extra,
         "model": ErrorResponse,
         "description": _GATEWAY_ERRORS[status][0],
         "content": {
@@ -109,6 +137,10 @@ def _operation_docs(
     for status in sorted(_GATEWAY_ERRORS):
         if status == 413 and endpoint.method not in _BODY_METHODS:
             continue
+        if status == 429 and (endpoint.method, endpoint.gateway_path) not in (
+            LIMITED_ENDPOINTS
+        ):
+            continue
         responses[status] = _gateway_response(status, endpoint.upstream, limit)
     # Ответы MS-4 описывают его собственные ошибки и перекрывают общие.
     for status, response in operation["responses"].items():
@@ -135,9 +167,35 @@ def _operation_docs(
     }
 
 
-# Точка расширения на входе: сюда встанут rate limit и проверка пользователя.
+def request_client_ip(request: Request) -> str:
+    """Адрес клиента с учётом доверенных прокси (TRUSTED_PROXIES)."""
+    return resolve_client_ip(
+        request.client.host if request.client else None,
+        request.headers.getlist("x-forwarded-for"),
+        request.app.state.settings.trusted_networks,
+    )
+
+
+# Вход в проксируемый маршрут: лимит запросов; сюда же встанет проверка пользователя.
 async def edge_guard(request: Request) -> None:
-    return None
+    limiter: RateLimiter | None = request.app.state.rate_limiter
+    route = request.scope.get("route")
+    if limiter is None or (request.method, getattr(route, "path", "")) not in (
+        LIMITED_ENDPOINTS
+    ):
+        return
+    key = rate_limit_key(request_client_ip(request))
+    retry_after = limiter.check(key)
+    if retry_after is None:
+        return
+    request.app.state.rate_limit_metrics.rejected.labels(route.path).inc()
+    logger.warning(
+        "rate_limited",
+        route=route.path,
+        client=limiter.fingerprint(key),
+        retry_after_seconds=retry_after,
+    )
+    raise RateLimited(retry_after)
 
 
 def _register(
@@ -162,7 +220,7 @@ def _register(
         headers = upstream_request_headers(
             request.headers.raw,
             request_id=request_id,
-            client_ip=request.client.host if request.client else None,
+            client_ip=request_client_ip(request),
             scheme=request.url.scheme,
         )
         upstream = await client.forward(

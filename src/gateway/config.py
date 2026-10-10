@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from gateway.ratelimit import Network, parse_networks
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -23,6 +25,12 @@ class Settings(BaseSettings):
     upstream_keepalive_expiry_seconds: float = Field(default=2, gt=0, le=60)
     upstream_max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
     max_request_body_bytes: int = Field(default=64 * 1024, ge=1)
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = Field(default=10, ge=1, le=100_000)
+    rate_limit_window_seconds: float = Field(default=60, gt=0, le=86_400)
+    rate_limit_max_keys: int = Field(default=10_000, ge=1, le=1_000_000)
+    # Подсети прокси, которым верим в X-Forwarded-For (CIDR через запятую).
+    trusted_proxies: str = ""
     routes_file: Path = Path("config/routes.toml")
     contract_file: Path = Path("contracts/receipes.openapi.json")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -33,6 +41,19 @@ class Settings(BaseSettings):
     @classmethod
     def optional_collector(cls, value: str | None) -> str | None:
         return None if value == "" else value
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def valid_networks(cls, value: str) -> str:
+        try:
+            parse_networks(value)
+        except ValueError:
+            raise ValueError("TRUSTED_PROXIES must be comma-separated CIDRs") from None
+        return value
+
+    @property
+    def trusted_networks(self) -> tuple[Network, ...]:
+        return parse_networks(self.trusted_proxies)
 
     # Базовый адрес сервиса без пути: путь целиком задаёт таблица маршрутов.
     @field_validator("upstream_recipes_url")

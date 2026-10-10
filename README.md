@@ -35,6 +35,7 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
+| 429 | `RATE_LIMITED` | только `POST /recipes/generate-menu`: превышен лимит запросов с одного адреса; заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
 | 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
@@ -80,6 +81,11 @@ curl --fail http://127.0.0.1:8080/metrics
 | `UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | Простой keep-alive; меньше таймаута сервера MS-4 | `2` |
 | `UPSTREAM_MAX_RESPONSE_BYTES` | Предел ответа MS-4 | `2097152` |
 | `MAX_REQUEST_BODY_BYTES` | Предел тела запроса клиента | `65536` |
+| `RATE_LIMIT_ENABLED` | Включает лимит на `POST /recipes/generate-menu` (`false` — отключён, схема `/docs` не меняется) | `true` |
+| `RATE_LIMIT_REQUESTS` | Сколько запросов с одного адреса за окно | `10` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Длина скользящего окна | `60` |
+| `RATE_LIMIT_MAX_KEYS` | Потолок числа отслеживаемых адресов (старые вытесняются) | `10000` |
+| `TRUSTED_PROXIES` | CIDR прокси через запятую, которым верим в `X-Forwarded-For`; пусто — лимит по адресу сокета | пусто |
 | `ROUTES_FILE` | Файл маршрутов | `config/routes.toml` |
 | `CONTRACT_FILE` | Снимок контракта MS-4 для документации | `contracts/receipes.openapi.json` |
 | `LOG_LEVEL` | DEBUG / INFO / WARNING / ERROR | `INFO` |
@@ -109,9 +115,10 @@ curl --fail http://127.0.0.1:8080/metrics
 - Клиентские `X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `X-Request-ID`, `Cookie`,
   `traceparent`, `tracestate`, `baggage`, `X-User-*`, `X-Auth-*` в MS-4 не
   передаются; gateway выставляет свои `X-Forwarded-For/Proto` и `X-Request-ID`.
-  `X-Forwarded-For` для MS-4 — адрес непосредственного соседа gateway (за NetBird
-  это адрес его reverse proxy, а не клиента). uvicorn запущен с `--no-proxy-headers`,
-  поэтому клиентские `X-Forwarded-*` на адрес соседа не влияют. Заголовок `Server`
+  `X-Forwarded-For` для MS-4 — адрес клиента: по умолчанию адрес сокетного соседа
+  (за NetBird это адрес его reverse proxy), а при заданных `TRUSTED_PROXIES` —
+  клиент из цепочки (см. «Лимит запросов»). uvicorn запущен с `--no-proxy-headers`,
+  поэтому клиентские `X-Forwarded-*` на этот адрес не влияют, пока сосед не доверенный. Заголовок `Server`
   не отдаётся (`--no-server-header`). `X-Forwarded-Proto` в MS-4 всегда `http`,
   даже если снаружи был TLS.
 - Тело запроса читается и пересылается только у методов с телом (POST); у GET оно
@@ -123,6 +130,37 @@ curl --fail http://127.0.0.1:8080/metrics
   клиент всегда создаётся с явным транспортом, а `trust_env=False`.
 - Повторов нет, кроме одной попытки установить соединение, когда запрос ещё не
   ушёл.
+
+## Лимит запросов
+
+Лимит защищает дорогую LLM-генерацию: `POST /recipes/generate-menu` принимает не
+более `RATE_LIMIT_REQUESTS` запросов за `RATE_LIMIT_WINDOW_SECONDS` (10 за 60 с) с
+одного адреса. Остальные операции (в том числе опрос `GET .../{task_id}`) не
+ограничены. Это отклонение от «без ограничений доступа» в спеках v1, поэтому лимит
+можно выключить: `RATE_LIMIT_ENABLED=false`.
+
+- Проверка стоит после сопоставления маршрута (зависимость FastAPI), поэтому
+  варианты пути либо дают 404/400, либо учитываются: обойти лимит нельзя.
+- Считается каждая попытка до проксирования; отклонённые (429) в счёт не идут.
+  Алгоритм: скользящий журнал в памяти процесса; `Retry-After` — целое число секунд
+  ≥ 1 до освобождения самой старой попытки.
+- Ключ — IP клиента, IPv6 по /64. `X-Forwarded-For` читается, только если сокетный
+  сосед входит в `TRUSTED_PROXIES`; тогда берётся правый недоверенный адрес цепочки,
+  начало цепочки (его подделывает клиент) игнорируется. uvicorn по-прежнему
+  запущен с `--no-proxy-headers`: разбор делает сам gateway, поэтому поведение не
+  зависит от `FORWARDED_ALLOW_IPS`. Этот же адрес уходит в MS-4 как `X-Forwarded-For`.
+- **Перед включением на stage** нужно узнать, что присылает NetBird Reverse Proxy
+  (`X-Forwarded-For`, адрес сокета), и задать `TRUSTED_PROXIES` его подсетью. С
+  пустым значением ключом будет адрес прокси и лимит окажется общим на всех
+  пользователей: при старте gateway пишет warning `rate_limit_keyed_by_socket_address`.
+- Один процесс (`--workers 1`) и память: при нескольких репликах лимит умножается на
+  их число (нужен общий Redis), при перезапуске счётчики сбрасываются. Клиенты за
+  CGNAT делят адрес и могут получать ложные 429, поэтому есть выключатель.
+- Метрика `gateway_rate_limited_total{route}` без адресов; в логе событие
+  `rate_limited` с коротким HMAC-хэшем ключа (адрес не пишется).
+- Клиент (Android) должен обрабатывать 429 и не повторять запрос раньше `Retry-After`.
+  Коды `RATE_LIMITED` (429), `PAYLOAD_TOO_LARGE` (413), `METHOD_NOT_ALLOWED` (405) и
+  504 нужно добавить в TDR-4.
 
 ## Наблюдаемость
 

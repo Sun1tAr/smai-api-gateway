@@ -16,7 +16,7 @@ from gateway.asgi import RequestContextMiddleware, StripTraceContext
 from gateway.config import Settings
 from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
-from gateway.metrics import UpstreamMetrics
+from gateway.metrics import RateLimitMetrics, UpstreamMetrics
 from gateway.observability import (
     configure_logging,
     create_tracer_provider,
@@ -24,6 +24,7 @@ from gateway.observability import (
     redact_span,
 )
 from gateway.proxy import UpstreamClient
+from gateway.ratelimit import RateLimiter
 from gateway.routing import load_routes
 
 logger = structlog.get_logger()
@@ -53,6 +54,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("service_started")
+        if app.state.rate_limiter is not None and not settings.trusted_proxies:
+            logger.warning("rate_limit_keyed_by_socket_address")
         try:
             yield
         finally:
@@ -71,6 +74,16 @@ def create_app(
     app.state.settings = settings
     app.state.tracer_provider = provider
     app.state.upstream_client = client
+    app.state.rate_limit_metrics = RateLimitMetrics(registry)
+    app.state.rate_limiter = (
+        RateLimiter(
+            requests=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=settings.rate_limit_max_keys,
+        )
+        if settings.rate_limit_enabled
+        else None
+    )
     register_error_handlers(app)
     app.include_router(health_router)
     register_routes(app, routes, contract, settings.max_request_body_bytes)

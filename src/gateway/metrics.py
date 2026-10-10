@@ -33,3 +33,15 @@ class UpstreamMetrics:
             ["upstream"],
             registry=registry,
         )
+
+
+class RateLimitMetrics:
+    """Отказы по лимиту. Метки без адресов клиентов."""
+
+    def __init__(self, registry: CollectorRegistry) -> None:
+        self.rejected = Counter(
+            "gateway_rate_limited_total",
+            "Запросы, отклонённые лимитом с кодом 429.",
+            ["route"],
+            registry=registry,
+        )
