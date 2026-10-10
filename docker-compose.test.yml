@@ -1,0 +1,32 @@
+# Проверка без внешних зависимостей: docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests
+services:
+  tests:
+    build:
+      context: .
+      target: test
+    environment:
+      GATEWAY_URL: http://gateway:8000
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      target: production
+    environment:
+      UPSTREAM_RECIPES_URL: http://recipes:8000
+    depends_on:
+      recipes:
+        condition: service_healthy
+
+  recipes:
+    build:
+      context: .
+      target: test
+    command: ["uvicorn", "tests.stubs.recipes_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
