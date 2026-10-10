@@ -349,3 +349,41 @@ def test_refund_makes_the_next_table_full_check_rescan() -> None:
     assert rl.check("x").table_full
     rl.refund("a", first.stamp)  # a опустел и удалён: место свободно
     assert rl.check("x").allowed
+
+
+def test_cached_table_full_answer_ends_exactly_when_the_oldest_key_expires() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=1, max_keys=1)
+    rl.check("a")  # t=1000, освободится в 1060
+    assert rl.check("x").retry_after == 60
+    clock.now = 1059.5
+    assert rl.check("x").retry_after == 1
+    clock.now = 1060
+    assert rl.check("x").allowed
+
+
+def test_refund_resets_the_cache_even_when_the_key_keeps_other_attempts() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=2, max_keys=2)
+    rl.check("a")  # t=1000
+    clock.now += 10
+    second = rl.check("a")  # t=1010: a держит две попытки
+    rl.check("b")  # t=1010
+    assert rl.check("c").retry_after == 60  # обе записи держат t=1010: 1070
+    rl.refund("a", second.stamp)  # у a остаётся попытка t=1000 -> освободится в 1060
+    assert rl.check("c").retry_after == 50
+
+
+def test_new_attempt_of_an_existing_key_moves_the_table_full_deadline() -> None:
+    clock = Clock()
+    rl = limiter(clock, requests=2, max_keys=2)
+    rl.check("a")  # t=1000
+    clock.now += 10
+    rl.check("b")  # t=1010
+    clock.now += 10
+    assert rl.check("c").retry_after == 40  # a: 1000 + 60 - 1020
+    clock.now += 10
+    assert rl.check("a").allowed  # t=1030: последняя попытка a теперь 1030
+    clock.now += 10  # t=1040
+    # Теперь раньше всех освободится b (1010 + 60 - 1040), а не a.
+    assert rl.check("c").retry_after == 30

@@ -196,6 +196,7 @@ class RateLimiter:
             wait = math.ceil(oldest + self._window - now)
             return Admission(wait, first_denial=first)
         entry.stamps.append(now)
+        self._full_until = 0.0  # у ключа появилась новая последняя попытка
         self._log.move_to_end(key)
         return Admission(None, stamp=now)
 
