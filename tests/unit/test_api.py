@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from gateway.main import create_app
 from tests.conftest import Recorder
 
 TASK = "b1e2c3d4-5678-90ab-cdef-1234567890ab"
@@ -205,18 +206,55 @@ async def test_response_hop_by_hop_headers_are_dropped(
         200,
         b'{"status":"pending"}',
         headers={
-            "connection": "close",
+            "connection": "x-foo",
+            "x-foo": "named by connection",
             "keep-alive": "timeout=5",
-            "server": "uvicorn",
+            "server": "internal-app",
             "x-extra": "1",
         },
     )
     response = await gateway.get(f"/recipes/generate-menu/{TASK}")
-    assert "keep-alive" not in response.headers
-    assert response.headers.get("connection") != "close"
-    assert "uvicorn" not in response.headers.get("server", "")
+    for name in ("keep-alive", "connection", "x-foo", "server"):
+        assert name not in response.headers
     assert response.headers["x-extra"] == "1"
     assert int(response.headers["content-length"]) == len(response.content)
+
+
+async def test_upstream_redirect_is_502_and_location_does_not_leak(
+    gateway: httpx.AsyncClient, upstream: Recorder
+) -> None:
+    upstream.respond(307, b"", headers={"location": "http://recipes:8000/x"})
+    response = await gateway.get(f"/recipes/generate-menu/{TASK}")
+    assert response.status_code == 502
+    assert response.json()["error"]["details"]["reason"] == "protocol"
+    assert "location" not in response.headers
+    assert "8000" not in response.text
+
+
+async def test_get_body_is_not_read_or_forwarded(
+    gateway: httpx.AsyncClient, upstream: Recorder
+) -> None:
+    response = await gateway.request(
+        "GET", f"/recipes/generate-menu/{TASK}", content=b"x" * 200_000
+    )
+    assert response.status_code == 202
+    assert upstream.requests[0].content == b""
+
+
+async def test_edge_guard_runs_on_every_proxied_route(settings, upstream) -> None:
+    from fastapi.routing import APIRoute
+
+    from gateway.api import edge_guard
+
+    app = create_app(settings, transport=httpx.MockTransport(upstream))
+    proxied = [
+        r
+        for r in app.routes
+        if isinstance(r, APIRoute) and r.path.startswith("/recipes")
+    ]
+    assert len(proxied) == 2
+    for route in proxied:
+        assert [d.call for d in route.dependant.dependencies] == [edge_guard]
 
 
 async def test_upstream_down_is_502_in_error_format(settings) -> None:

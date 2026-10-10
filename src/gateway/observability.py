@@ -34,6 +34,7 @@ def configure_logging(level: str) -> None:
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         add_context,
+        structlog.processors.format_exc_info,
     ]
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
@@ -73,3 +74,27 @@ def create_tracer_provider(settings: Settings) -> TracerProvider:
             BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, timeout=5))
         )
     return provider
+
+
+_DROPPED_SPAN_ATTRIBUTES = frozenset(
+    {"http.user_agent", "user_agent.original", "net.peer.ip", "client.address"}
+)
+_URL_SPAN_ATTRIBUTES = ("http.url", "url.full", "http.target", "url.query")
+
+
+# В коллектор не уходят query, User-Agent и адрес клиента: логи их тоже не пишут.
+# Вызывается из хуков инструментаторов, когда атрибуты спана уже выставлены.
+def redact_span(span: Any, *_: Any) -> None:
+    attributes = getattr(span, "_attributes", None)
+    if attributes is None:
+        return
+    for key in list(attributes):
+        if key in _DROPPED_SPAN_ATTRIBUTES or key == "url.query":
+            del attributes[key]
+        elif key in _URL_SPAN_ATTRIBUTES:
+            attributes[key] = str(attributes[key]).split("?", 1)[0]
+
+
+# Клиент httpx асинхронный, поэтому его хук тоже должен быть корутиной.
+async def redact_client_span(span: Any, *_: Any) -> None:
+    redact_span(span)

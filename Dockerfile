@@ -21,9 +21,9 @@ COPY contracts ./contracts
 USER gateway
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=10s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=8).close()"]
+    CMD ["python", "-c", "from urllib.request import ProxyHandler, build_opener; build_opener(ProxyHandler({})).open('http://127.0.0.1:8000/health', timeout=8).close()"]
 # Один процесс: счётчики и пул соединений живут в памяти процесса.
-CMD ["uvicorn", "gateway.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+CMD ["uvicorn", "gateway.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log", "--no-server-header", "--no-proxy-headers"]
 
 FROM runtime AS test
 USER root

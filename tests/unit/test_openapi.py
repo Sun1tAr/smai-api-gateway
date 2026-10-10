@@ -44,7 +44,7 @@ def test_documented_paths_equal_the_allowlist(schema: dict) -> None:
         (path, method)
         for path, item in schema["paths"].items()
         for method in item
-        if path != "/health"
+        if path not in ("/health", "/metrics")
     }
     assert documented == {(path, method) for path, method, _ in OPERATIONS}
 
@@ -60,7 +60,14 @@ def test_operation_matches_the_contract_snapshot(
     assert operation.get("requestBody") == expected.get("requestBody")
     assert operation.get("parameters") == expected.get("parameters")
     for status, response in expected["responses"].items():
-        assert operation["responses"][status]["content"] == response["content"]
+        actual = operation["responses"][status]["content"]["application/json"]
+        wanted = response["content"]["application/json"]
+        if status == "400":
+            # Пример MS-4 остаётся, рядом появляется пример самого gateway.
+            assert set(actual["examples"]) == {"ms4_validation", "gateway_path"}
+            assert actual["schema"] == wanted["schema"]
+        else:
+            assert actual == wanted
 
 
 @pytest.mark.parametrize(("path", "method", "upstream_path"), OPERATIONS)
@@ -101,3 +108,41 @@ def test_missing_contract_for_an_allowed_path_is_fatal(
 
     with pytest.raises(ContractError):
         create_app(settings.model_copy(update={"contract_file": broken}))
+
+
+@pytest.mark.parametrize(("path", "method", "upstream_path"), OPERATIONS)
+async def test_gateway_error_examples_carry_the_right_reason(
+    schema: dict, path: str, method: str, upstream_path: str
+) -> None:
+    responses = schema["paths"][path][method]["responses"]
+    for status, reason in (("502", "connect"), ("503", "pool"), ("504", "timeout")):
+        example = responses[status]["content"]["application/json"]["example"]
+        assert example["error"]["details"] == {"upstream": "recipes", "reason": reason}
+    gateway_400 = responses["400"]["content"]["application/json"]
+    example = (
+        gateway_400.get("example") or gateway_400["examples"]["gateway_path"]["value"]
+    )
+    assert example["error"]["message"] == "Request path is invalid"
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        lambda op: op.pop("summary"),
+        lambda op: op.pop("description"),
+        lambda op: op["responses"]["400"].pop("content"),
+        lambda op: op["responses"]["400"]["content"]["application/json"].pop("example"),
+        lambda op: op["responses"].pop("202", None) or op["responses"].pop("200", None),
+    ],
+)
+def test_incomplete_contract_stops_the_start(
+    settings: Settings, tmp_path: Path, broken
+) -> None:
+    from gateway.api import ContractError
+
+    contract = json.loads(json.dumps(CONTRACT))
+    broken(contract["paths"]["/generate-menu"]["post"])
+    file = tmp_path / "contract.json"
+    file.write_text(json.dumps(contract), "utf-8")
+    with pytest.raises(ContractError):
+        create_app(settings.model_copy(update={"contract_file": file}))

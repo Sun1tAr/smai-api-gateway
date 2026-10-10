@@ -102,7 +102,7 @@ async def test_gzip_body_is_returned_raw_with_its_encoding_header() -> None:
     assert (b"content-encoding", b"gzip") in response.headers
 
 
-async def test_redirect_is_not_followed() -> None:
+async def test_redirect_is_not_followed_and_not_passed_on() -> None:
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -110,8 +110,8 @@ async def test_redirect_is_not_followed() -> None:
         calls += 1
         return reply(307, headers={"location": "http://recipes:8000/x"})
 
-    response = await forward(make_client(handler))
-    assert response.status_code == 307
+    with pytest.raises(UpstreamProtocolError):
+        await forward(make_client(handler))
     assert calls == 1
 
 
@@ -168,6 +168,66 @@ async def test_response_over_the_limit_is_rejected_while_reading() -> None:
 async def test_environment_proxy_variables_are_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
-    client = make_client(lambda request: reply())
-    assert client.client.trust_env is False
+    # Без внедрённого транспорта: HTTP_PROXY указывает на закрытый порт.
+    async def hello(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(hello, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "")
+    settings = Settings(_env_file=None, upstream_recipes_url=f"http://127.0.0.1:{port}")
+    client = UpstreamClient(settings, {"recipes": settings.upstream_url("recipes")})
+    try:
+        response = await forward(client)
+    finally:
+        await client.aclose()
+        server.close()
+    assert response.status_code == 200
+    assert response.body == b"ok"
+
+
+async def test_pool_and_keepalive_limits_reach_the_transport() -> None:
+    settings = Settings(
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_max_connections=7,
+        upstream_keepalive_expiry_seconds=3,
+    )
+    client = UpstreamClient(settings, {"recipes": "http://recipes:8000"})
+    try:
+        pool = client.client._transport._pool  # type: ignore[attr-defined]
+        assert pool._max_connections == 7
+        assert pool._keepalive_expiry == 3
+        assert pool._retries == 1
+    finally:
+        await client.aclose()
+
+
+async def test_upstream_up_gauge_only_drops_on_connect_and_timeout() -> None:
+    from prometheus_client import CollectorRegistry
+
+    from gateway.metrics import UpstreamMetrics
+
+    def too_large(request: httpx.Request) -> httpx.Response:
+        return reply(200, b"x" * 2000)
+
+    registry = CollectorRegistry()
+    settings = Settings(
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_max_response_bytes=1024,
+    )
+    client = UpstreamClient(
+        settings,
+        {"recipes": "http://recipes:8000"},
+        transport=httpx.MockTransport(too_large),
+        metrics=UpstreamMetrics(registry),
+    )
+    with pytest.raises(UpstreamResponseTooLarge):
+        await forward(client)
+    value = registry.get_sample_value("gateway_upstream_up", {"upstream": "recipes"})
+    assert value in (None, 1.0)

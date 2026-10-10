@@ -56,6 +56,7 @@ async def record(request: Request, call_next):
                 else ""
             ),
             "headers": dict(request.headers),
+            "client_port": request.client.port if request.client else None,
         }
     )
     return await call_next(request)

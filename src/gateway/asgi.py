@@ -79,28 +79,32 @@ class RequestContextMiddleware:
                 message = {**message, "headers": headers}
             await send(message)
 
+        failed = False
         try:
             try:
                 await self.app(scope, receive, send_with_id)
             except Exception as error:
+                failed = True
                 logger.error(
                     "http_request_failed",
                     error_type=type(error).__name__,
                     exc_info=True,
                 )
-                if response_started:
+                if not response_started:
+                    response = error_response(
+                        500, "INTERNAL_ERROR", "Internal server error"
+                    )
+                    await response(scope, receive, send_with_id)
+                else:
                     raise
-                response = error_response(
-                    500, "INTERNAL_ERROR", "Internal server error"
-                )
-                await response(scope, receive, send_with_id)
+        finally:
             route = scope.get("route")
             logger.info(
                 "http_request",
                 method=scope["method"],
                 path=getattr(route, "path", "unmatched"),
-                status_code=status_code,
+                status_code=status_code if response_started else 500,
+                failed=failed or not response_started,
                 duration_seconds=round(time.perf_counter() - started, 6),
             )
-        finally:
             structlog.contextvars.clear_contextvars()

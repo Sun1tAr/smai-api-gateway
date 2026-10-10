@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
 
 from gateway.errors import ErrorResponse, InvalidRequestPath
@@ -27,68 +27,89 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ContractError(f"cannot read contract: {type(error).__name__}") from None
 
 
-# Ошибки, которые отвечает сам gateway, описываются у каждой проксируемой операции.
-_GATEWAY_ERRORS: dict[int, tuple[str, str, str]] = {
+# Ошибки, которые отвечает сам gateway: описание, code, message и reason в details.
+_GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
     400: (
         "Gateway отклонил недопустимые символы или закодированные разделители "
         "в пути или query.",
         "VALIDATION_ERROR",
         "Request path is invalid",
+        None,
     ),
     413: (
         "Тело запроса больше `MAX_REQUEST_BODY_BYTES`.",
         "PAYLOAD_TOO_LARGE",
         "Request body is too large",
+        None,
     ),
     502: (
-        "Сервис недоступен или оборвал соединение.",
+        "Сервис недоступен, оборвал соединение или ответил некорректно.",
         "EXTERNAL_SERVICE_ERROR",
         "Upstream service is unavailable",
+        "connect",
     ),
     503: (
         "Gateway перегружен: исчерпан пул соединений к сервису. Ответ 503 самого "
         "сервиса приходит как есть и отличается кодом ошибки.",
         "EXTERNAL_SERVICE_ERROR",
         "Gateway is overloaded, try again later",
+        "pool",
     ),
     504: (
         "Сервис не ответил за отведённое время. Запрос мог быть выполнен.",
         "EXTERNAL_SERVICE_ERROR",
         "Upstream service did not respond in time",
+        "timeout",
     ),
 }
 
 
-def _gateway_response(status: int, description: str, code: str, message: str) -> dict:
-    details = {"upstream": "recipes", "reason": "timeout"} if status >= 500 else {}
+def _gateway_example(status: int, upstream: str) -> dict[str, Any]:
+    _, code, message, reason = _GATEWAY_ERRORS[status]
+    details: dict[str, Any] = {}
+    if reason is not None:
+        details = {"upstream": upstream, "reason": reason}
+    elif status == 413:
+        details = {"max_bytes": 65536}
+    return {"error": {"code": code, "message": message, "details": details}}
+
+
+def _gateway_response(status: int, upstream: str) -> dict[str, Any]:
     return {
         "model": ErrorResponse,
-        "description": description,
+        "description": _GATEWAY_ERRORS[status][0],
         "content": {
-            "application/json": {
-                "example": {
-                    "error": {"code": code, "message": message, "details": details}
-                }
-            }
+            "application/json": {"example": _gateway_example(status, upstream)}
         },
     }
 
 
+def _contract_response(where: str, status: str, response: Any) -> dict[str, Any]:
+    if not isinstance(response, dict) or "description" not in response:
+        raise ContractError(f"{where}: response {status} has no description")
+    media = response.get("content", {}).get("application/json")
+    if not isinstance(media, dict) or not ("example" in media or "examples" in media):
+        raise ContractError(f"{where}: response {status} has no JSON example")
+    return response
+
+
 def _operation_docs(endpoint: Endpoint, contract: dict[str, Any]) -> dict[str, Any]:
+    where = f"{endpoint.method} {endpoint.upstream_path}"
     try:
         operation = contract["paths"][endpoint.upstream_path][endpoint.method.lower()]
     except KeyError:
-        raise ContractError(
-            f"contract has no {endpoint.method} {endpoint.upstream_path}"
-        ) from None
+        raise ContractError(f"contract has no {where}") from None
+    for key in ("summary", "description", "responses"):
+        if not operation.get(key):
+            raise ContractError(f"{where}: no {key}")
     responses: dict[int | str, dict[str, Any]] = {}
-    for status, (description, code, message) in sorted(_GATEWAY_ERRORS.items()):
+    for status in sorted(_GATEWAY_ERRORS):
         if status == 413 and endpoint.method not in _BODY_METHODS:
             continue
-        responses[status] = _gateway_response(status, description, code, message)
+        responses[status] = _gateway_response(status, endpoint.upstream)
     # Ответы MS-4 описывают его собственные ошибки и перекрывают общие.
     for status, response in operation["responses"].items():
-        response = dict(response)
+        response = dict(_contract_response(where, status, response))
         if status == "400":
             response["description"] += " " + _GATEWAY_ERRORS[400][0]
         responses[status] = response
@@ -98,8 +119,10 @@ def _operation_docs(endpoint: Endpoint, contract: dict[str, Any]) -> dict[str, A
     if "parameters" in operation:
         extra["parameters"] = operation["parameters"]
     elif _PARAM.search(endpoint.upstream_path):
-        raise ContractError(f"contract has no parameters for {endpoint.upstream_path}")
+        raise ContractError(f"{where}: no parameters")
     successes = sorted(int(s) for s in operation["responses"] if s.startswith("2"))
+    if not successes:
+        raise ContractError(f"{where}: no 2xx response")
     return {
         "summary": operation["summary"],
         "description": operation["description"],
@@ -107,6 +130,11 @@ def _operation_docs(endpoint: Endpoint, contract: dict[str, Any]) -> dict[str, A
         "openapi_extra": extra,
         "status_code": successes[0],
     }
+
+
+# Точка расширения на входе: сюда встанут rate limit и проверка пользователя.
+async def edge_guard(request: Request) -> None:
+    return None
 
 
 def _register(
@@ -121,7 +149,12 @@ def _register(
             )
         except InvalidPath:
             raise InvalidRequestPath() from None
-        body = await read_limited_body(request, limit)
+        # Тело есть только у методов с телом; у GET оно не читается и не пересылается.
+        body = (
+            await read_limited_body(request, limit)
+            if endpoint.method in _BODY_METHODS
+            else b""
+        )
         request_id = request.state.request_id
         headers = upstream_request_headers(
             request.headers.raw,
@@ -151,6 +184,7 @@ def _register(
         operation_id=f"{endpoint.method.lower()}_{slug}",
         tags=[endpoint.prefix],
         response_class=Response,
+        dependencies=[Depends(edge_guard)],
         **docs,
     )
 
@@ -161,6 +195,19 @@ def register_routes(
     for route in routes:
         for endpoint in route.endpoints:
             _register(app, endpoint, _operation_docs(endpoint, contract), limit)
+
+
+# 400 из контракта (валидация MS-4) и 400 самого gateway живут рядом как два примера.
+def _merge_400(content: dict[str, Any], upstream: str) -> dict[str, Any]:
+    media = content["application/json"]
+    examples: dict[str, Any] = {}
+    if "example" in media:
+        examples["ms4_validation"] = {"value": media.pop("example")}
+    else:
+        examples.update(media.pop("examples", {}))
+    examples["gateway_path"] = {"value": _gateway_example(400, upstream)}
+    media["examples"] = examples
+    return content
 
 
 # FastAPI выкидывает null из примеров (exclude_none), а в контракте `menu: null`
@@ -185,9 +232,10 @@ def install_openapi(
                         endpoint.method.lower()
                     ]
                     for status, response in source["responses"].items():
-                        target["responses"][status]["content"] = copy.deepcopy(
-                            response["content"]
-                        )
+                        content = copy.deepcopy(response["content"])
+                        if status == "400":
+                            content = _merge_400(content, endpoint.upstream)
+                        target["responses"][status]["content"] = content
                     if "requestBody" in source:
                         target["requestBody"] = copy.deepcopy(source["requestBody"])
             app.openapi_schema = schema

@@ -17,7 +17,12 @@ from gateway.config import Settings
 from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
 from gateway.metrics import UpstreamMetrics
-from gateway.observability import configure_logging, create_tracer_provider
+from gateway.observability import (
+    configure_logging,
+    create_tracer_provider,
+    redact_client_span,
+    redact_span,
+)
 from gateway.proxy import UpstreamClient
 from gateway.routing import load_routes
 
@@ -39,7 +44,11 @@ def create_app(
     client = UpstreamClient(
         settings, upstreams, transport=transport, metrics=UpstreamMetrics(registry)
     )
-    HTTPXClientInstrumentor.instrument_client(client.client, tracer_provider=provider)
+    HTTPXClientInstrumentor.instrument_client(
+        client.client,
+        tracer_provider=provider,
+        request_hook=redact_client_span,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -71,8 +80,13 @@ def create_app(
         registry=registry,
         should_group_status_codes=False,
         should_ignore_untemplated=True,
-    ).instrument(app).expose(app, include_in_schema=False)
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+    ).instrument(app).expose(app, include_in_schema=True, tags=["service"])
+    FastAPIInstrumentor.instrument_app(
+        app,
+        tracer_provider=provider,
+        excluded_urls="health,metrics",
+        server_request_hook=redact_span,
+    )
     # Снаружи всего стека, включая OTel: клиентский traceparent в трейс не попадает.
     build_stack = app.build_middleware_stack
 

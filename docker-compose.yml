@@ -5,6 +5,10 @@ services:
     build:
       context: .
       target: production
+    # Остальные настройки из .env.example (таймауты, лимиты) подхватываются из .env.
+    env_file:
+      - path: .env
+        required: false
     environment:
       UPSTREAM_RECIPES_URL: ${UPSTREAM_RECIPES_URL:?Set UPSTREAM_RECIPES_URL}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

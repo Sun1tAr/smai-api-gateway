@@ -117,6 +117,7 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         schema = (await gateway.get("/openapi.json")).json()
     assert set(schema["paths"]) == {
         "/health",
+        "/metrics",
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
     }
@@ -130,3 +131,5 @@ async def test_sequential_requests_reuse_the_connection(
             response = await gateway.get(f"/recipes/generate-menu/{TASK}")
             assert response.status_code == 200
     assert len(stub_requests) == 5
+    # Один и тот же исходящий порт: соединение с MS-4 переиспользуется.
+    assert len({request["client_port"] for request in stub_requests}) == 1

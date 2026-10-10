@@ -140,8 +140,9 @@ class UpstreamClient:
         if self._metrics is not None:
             self._metrics.errors.labels(upstream, failure.reason).inc()
             self._metrics.duration.labels(upstream, route).observe(elapsed)
-            # Перегрузка пула говорит о самом gateway, а не о недоступности сервиса.
-            if failure.reason != "pool":
+            # Только connect и timeout означают недоступность: остальные ошибки
+            # (pool, protocol, response_too_large) не говорят о недоступности.
+            if failure.reason in ("connect", "timeout"):
                 self._metrics.up.labels(upstream).set(0)
         logger.warning(
             "upstream_request_failed",
@@ -184,6 +185,9 @@ class UpstreamClient:
     async def _send(self, request: httpx.Request, upstream: str) -> UpstreamResponse:
         response = await self._client.send(request, stream=True)
         try:
+            # Контракт не знает редиректов; Location с внутренним хостом не отдаём.
+            if 300 <= response.status_code < 400:
+                raise UpstreamProtocolError(upstream)
             declared = response.headers.get("content-length")
             if declared is not None and declared.isdigit():
                 if int(declared) > self._max_response_bytes:

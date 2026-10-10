@@ -86,7 +86,8 @@ curl --fail http://127.0.0.1:8080/metrics
 
 При запуске Python напрямую читается `.env` из рабочей директории; переменные
 процесса приоритетнее. Некорректная конфигурация (в том числе файл маршрутов)
-останавливает запуск. `.env` в образ не попадает; на stage/prod конфигурацию и
+останавливает запуск. `.env` в образ не попадает, но локальный Compose передаёт его
+в контейнер целиком (`env_file`, файл необязателен); на stage/prod конфигурацию и
 секреты задаёт DevOps.
 
 ## Как добавить путь или сервис
@@ -101,13 +102,21 @@ curl --fail http://127.0.0.1:8080/metrics
 ## Безопасность прокси
 
 - Путь разбирается по сырому `raw_path`; закодированные `..`, `/`, `\`, NUL и
-  двойное кодирование отклоняются с 400.
+  двойное кодирование отклоняются с 400. Пути с `//` и `%2f` вместо разделителя не
+  совпадают с шаблоном маршрута и получают 404; в MS-4 они не уходят.
 - Клиентские `X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `X-Request-ID`, `Cookie`,
   `traceparent`, `tracestate`, `baggage`, `X-User-*`, `X-Auth-*` в MS-4 не
   передаются; gateway выставляет свои `X-Forwarded-For/Proto` и `X-Request-ID`.
+  `X-Forwarded-For` для MS-4 — адрес непосредственного соседа gateway (за NetBird
+  это адрес его reverse proxy, а не клиента). uvicorn запущен с `--no-proxy-headers`,
+  поэтому клиентские `X-Forwarded-*` на адрес соседа не влияют. Заголовок `Server`
+  не отдаётся (`--no-server-header`).
+- Тело запроса читается и пересылается только у методов с телом (POST); у GET оно
+  отбрасывается. Тело POST больше `MAX_REQUEST_BODY_BYTES` получает 413.
 - `X-Request-ID` клиента принимается, если он ≤128 символов `[A-Za-z0-9._-]`,
   иначе генерируется новый. Тот же идентификатор возвращается клиенту.
-- Редиректы MS-4 не выполняются; `HTTP_PROXY`/`NO_PROXY` из окружения игнорируются.
+- Редиректы MS-4 не выполняются: ответ 3xx превращается в 502 (`reason=protocol`),
+  `Location` с внутренним хостом клиенту не отдаётся. `HTTP_PROXY`/`NO_PROXY` из окружения игнорируются.
 - Повторов нет, кроме одной попытки установить соединение, когда запрос ещё не
   ушёл.
 
@@ -119,8 +128,10 @@ curl --fail http://127.0.0.1:8080/metrics
 - Метрики `/metrics`: стандартные HTTP-метрики по шаблону пути и
   `gateway_upstream_requests_total{upstream,route,method,status}`,
   `gateway_upstream_request_duration_seconds{upstream,route}`,
-  `gateway_upstream_errors_total{upstream,reason}`, `gateway_upstream_up{upstream}`.
-- Трейсы: каждый запрос начинает новый трейс gateway (клиентский `traceparent`
+  `gateway_upstream_errors_total{upstream,reason}`, `gateway_upstream_up{upstream}`
+  (0 только после `connect`/`timeout`). Эндпоинт описан в `/docs` с тегом `service`.
+- Трейсы: `/health` и `/metrics` не трассируются; query, `User-Agent` и адрес клиента
+  в атрибуты спанов не попадают. Каждый запрос начинает новый трейс gateway (клиентский `traceparent`
   не доверяется) и передаёт `traceparent` в MS-4.
 
 ## Разработка и тесты

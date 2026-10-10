@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from gateway.errors import ErrorResponse
+
 router = APIRouter()
 
 
@@ -17,8 +19,29 @@ class HealthResponse(BaseModel):
         "бизнес-сервисов не проверяется: она видна в метрике "
         "`gateway_upstream_up`."
     ),
+    tags=["service"],
     response_model=HealthResponse,
-    responses={200: {"content": {"application/json": {"example": {"status": "ok"}}}}},
+    responses={
+        200: {
+            "description": "Процесс gateway жив.",
+            "content": {"application/json": {"example": {"status": "ok"}}},
+        },
+        500: {
+            "model": ErrorResponse,
+            "description": "Необработанная ошибка gateway.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "INTERNAL_ERROR",
+                            "message": "Internal server error",
+                            "details": {},
+                        }
+                    }
+                }
+            },
+        },
+    },
 )
 async def health() -> HealthResponse:
     return HealthResponse(status="ok")

@@ -236,3 +236,83 @@ async def test_logs_are_json_and_do_not_contain_query_or_body(
     assert request_event["path"] == "/recipes/generate-menu"
     assert re.fullmatch(r"[0-9a-f]{32}", request_event["trace_id"])
     assert request_event["request_id"]
+
+
+def log_events(output: str) -> list[dict]:
+    return [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+
+
+async def test_unhandled_error_logs_the_traceback(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("boom")
+
+    app = create_app(settings, transport=httpx.MockTransport(fail))
+    async with client_for(app) as client:
+        await client.get(f"/recipes/generate-menu/{TASK}")
+    events = log_events(capsys.readouterr().out)
+    failed = next(e for e in events if e["message"] == "http_request_failed")
+    assert "RuntimeError" in failed["exception"]
+    assert "Traceback" in failed["exception"]
+    request_event = next(e for e in events if e["message"] == "http_request")
+    assert request_event["status_code"] == 500
+    assert request_event["failed"] is True
+
+
+async def test_error_after_the_response_started_is_logged_and_reraised(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from gateway.asgi import RequestContextMiddleware
+    from gateway.observability import configure_logging
+
+    configure_logging("INFO")
+    sent: list[dict] = []
+
+    async def app(scope, receive, send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        raise RuntimeError("after start")
+
+    async def receive() -> dict:
+        return {"type": "http.request"}
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {"type": "http", "method": "GET", "path": "/x", "headers": []}
+    with pytest.raises(RuntimeError):
+        await RequestContextMiddleware(app)(scope, receive, send)
+    assert any(name == b"x-request-id" for name, _ in sent[0]["headers"])
+    events = log_events(capsys.readouterr().out)
+    assert {"http_request_failed", "http_request"} <= {e["message"] for e in events}
+    assert next(e for e in events if e["message"] == "http_request")["failed"] is True
+
+
+async def test_spans_do_not_carry_query_user_agent_or_client_address(
+    settings: Settings, upstream: Recorder
+) -> None:
+    app = create_app(settings, transport=httpx.MockTransport(upstream))
+    exporter = InMemorySpanExporter()
+    app.state.tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    async with client_for(app, client=("203.0.113.9", 5555)) as client:
+        await client.get(
+            f"/recipes/generate-menu/{TASK}?email=SECRETQUERY",
+            headers={"User-Agent": "SECRETAGENT/1.0"},
+        )
+        await client.get("/health")
+        await client.get("/metrics")
+    spans = exporter.get_finished_spans()
+    dump = json.dumps([dict(span.attributes) for span in spans], default=str)
+    for secret in ("SECRETQUERY", "SECRETAGENT", "203.0.113.9"):
+        assert secret not in dump
+    assert not any("health" in str(s.attributes) for s in spans)
+    assert {s.kind for s in spans} >= {SpanKind.SERVER, SpanKind.CLIENT}
+
+
+async def test_lifespan_closes_the_upstream_client(
+    settings: Settings, upstream: Recorder
+) -> None:
+    app = create_app(settings, transport=httpx.MockTransport(upstream))
+    async with app.router.lifespan_context(app):
+        assert not app.state.upstream_client.client.is_closed
+    assert app.state.upstream_client.client.is_closed
