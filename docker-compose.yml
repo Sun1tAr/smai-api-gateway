@@ -1,0 +1,40 @@
+# Сеть smai общая для всех сервисов контура: gateway находит MS-4 по имени recipes.
+# Один раз: docker network create smai
+services:
+  gateway:
+    build:
+      context: .
+      target: production
+    # Остальные настройки из .env.example (таймауты, лимиты) подхватываются из .env.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      UPSTREAM_RECIPES_URL: ${UPSTREAM_RECIPES_URL:?Set UPSTREAM_RECIPES_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    ports:
+      - "127.0.0.1:${GATEWAY_HTTP_PORT:-8080}:8000"
+    networks:
+      - smai
+
+  # Заглушка MS-4: docker compose --profile stub up --build
+  recipes-stub:
+    profiles: [stub]
+    build:
+      context: .
+      target: test
+    command: ["uvicorn", "tests.stubs.recipes_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      smai:
+        aliases:
+          - recipes
+
+networks:
+  smai:
+    external: true
