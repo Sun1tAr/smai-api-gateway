@@ -127,7 +127,8 @@ curl --fail http://127.0.0.1:8080/metrics
 ## Наблюдаемость
 
 - Логи: JSON в stdout (structlog) с `trace_id`, `request_id`, `service`; тела,
-  query и заголовки авторизации не пишутся. События `http_request`,
+  query и заголовки авторизации не пишутся. Успешные `/health` и `/metrics`
+  пишутся на DEBUG, их ошибки (4xx/5xx) на INFO. События `http_request`,
   `upstream_request`, `upstream_request_failed`.
 - Метрики `/metrics`: стандартные HTTP-метрики по шаблону пути и
   `gateway_upstream_requests_total{upstream,route,method,status}`,
