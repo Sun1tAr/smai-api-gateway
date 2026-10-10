@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from gateway import __version__
 from gateway.config import Settings
+from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
 from gateway.observability import configure_logging, create_tracer_provider
 
@@ -30,5 +31,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="SmartMeal API gateway", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.tracer_provider = provider
+    register_error_handlers(app)
     app.include_router(health_router)
     return app
