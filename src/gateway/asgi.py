@@ -11,6 +11,8 @@ logger = structlog.get_logger()
 
 # Общее правило gateway и MS-4: чужой идентификатор принимаем, только если он безопасен.
 REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
+# Служебные пути: успешные запросы пишутся на DEBUG, ошибки на INFO.
+_QUIET_PATHS = frozenset({"/health", "/metrics"})
 _TRACE_HEADERS = frozenset({b"traceparent", b"tracestate", b"baggage"})
 
 
@@ -99,12 +101,18 @@ class RequestContextMiddleware:
                     raise
         finally:
             route = scope.get("route")
-            logger.info(
+            path = getattr(route, "path", "unmatched")
+            final_status = status_code if response_started else 500
+            is_failure = failed or not response_started
+            # Опрос liveness и скрейп метрик раз в секунды не засоряют INFO.
+            quiet = path in _QUIET_PATHS and final_status < 400 and not is_failure
+            log = logger.debug if quiet else logger.info
+            log(
                 "http_request",
                 method=scope["method"],
-                path=getattr(route, "path", "unmatched"),
-                status_code=status_code if response_started else 500,
-                failed=failed or not response_started,
+                path=path,
+                status_code=final_status,
+                failed=is_failure,
                 duration_seconds=round(time.perf_counter() - started, 6),
             )
             structlog.contextvars.clear_contextvars()

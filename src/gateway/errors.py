@@ -39,6 +39,8 @@ class GatewayError(Exception):
     code = "INTERNAL_ERROR"
     message = "Internal server error"
 
+    headers: dict[str, str] | None = None
+
     def __init__(self, details: dict[str, Any] | None = None) -> None:
         super().__init__(self.message)
         self.details = details or {}
@@ -54,6 +56,16 @@ class PayloadTooLarge(GatewayError):
     status_code = 413
     code = "PAYLOAD_TOO_LARGE"
     message = "Request body is too large"
+
+
+class RateLimited(GatewayError):
+    status_code = 429
+    code = "RATE_LIMITED"
+    message = "Too many requests, try again later"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__({"retry_after_seconds": retry_after_seconds})
+        self.headers = {"Retry-After": str(retry_after_seconds)}
 
 
 class UpstreamFailure(GatewayError):
@@ -104,7 +116,9 @@ _HTTP_ERRORS = {
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(GatewayError)
     async def gateway_error(request: Request, exc: GatewayError) -> JSONResponse:
-        return error_response(exc.status_code, exc.code, exc.message, exc.details)
+        return error_response(
+            exc.status_code, exc.code, exc.message, exc.details, exc.headers
+        )
 
     # Значения полей не возвращаем: в них могут быть данные клиента.
     @app.exception_handler(RequestValidationError)

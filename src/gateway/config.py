@@ -1,8 +1,11 @@
+from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, field_validator
+from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from gateway.ratelimit import Network, parse_networks
 
 
 class Settings(BaseSettings):
@@ -23,6 +26,17 @@ class Settings(BaseSettings):
     upstream_keepalive_expiry_seconds: float = Field(default=2, gt=0, le=60)
     upstream_max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
     max_request_body_bytes: int = Field(default=64 * 1024, ge=1)
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = Field(default=10, ge=1, le=10_000)
+    rate_limit_window_seconds: float = Field(default=60, gt=0, le=86_400)
+    rate_limit_max_keys: int = Field(default=10_000, ge=1, le=1_000_000)
+    # Общий потолок на всех клиентов: защищает LLM, даже если адресов много.
+    rate_limit_global_requests: int = Field(default=100, ge=1, le=100_000)
+    rate_limit_ipv6_prefix: int = Field(default=56, ge=48, le=64)
+    # Явный выбор «ключ — адрес сокета» для запуска без доверенных прокси.
+    rate_limit_key_by_socket: bool = False
+    # Точные адреса прокси (CIDR через запятую), которым верим в X-Forwarded-For.
+    trusted_proxies: str = ""
     routes_file: Path = Path("config/routes.toml")
     contract_file: Path = Path("contracts/receipes.openapi.json")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -33,6 +47,35 @@ class Settings(BaseSettings):
     @classmethod
     def optional_collector(cls, value: str | None) -> str | None:
         return None if value == "" else value
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def valid_networks(cls, value: str) -> str:
+        try:
+            parse_networks(value)
+        except ValueError:
+            raise ValueError("TRUSTED_PROXIES must be comma-separated CIDRs") from None
+        return value
+
+    @cached_property
+    def trusted_networks(self) -> tuple[Network, ...]:
+        return parse_networks(self.trusted_proxies)
+
+    @model_validator(mode="after")
+    def rate_limit_is_safe_to_start(self) -> "Settings":
+        if self.rate_limit_requests * self.rate_limit_max_keys > 10_000_000:
+            raise ValueError("RATE_LIMIT_REQUESTS * RATE_LIMIT_MAX_KEYS is too large")
+        # За обратным прокси без TRUSTED_PROXIES все клиенты окажутся в одном бакете.
+        if (
+            self.rate_limit_enabled
+            and not self.trusted_networks
+            and not self.rate_limit_key_by_socket
+        ):
+            raise ValueError(
+                "rate limit needs TRUSTED_PROXIES, or RATE_LIMIT_KEY_BY_SOCKET=true "
+                "to key by the socket address, or RATE_LIMIT_ENABLED=false"
+            )
+        return self
 
     # Базовый адрес сервиса без пути: путь целиком задаёт таблица маршрутов.
     @field_validator("upstream_recipes_url")

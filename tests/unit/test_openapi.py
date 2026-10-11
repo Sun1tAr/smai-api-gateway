@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import httpx
+import jsonschema
 import pytest
 
 from gateway.config import Settings
@@ -17,6 +18,7 @@ GATEWAY_CODES = {
         "202",
         "400",
         "413",
+        "429",
         "500",
         "502",
         "503",
@@ -156,3 +158,34 @@ def test_service_endpoints_are_documented_with_examples(schema: dict) -> None:
         responses = schema["paths"][path]["get"]["responses"]
         assert set(responses) >= {"200", "500"}
         assert "example" in responses["500"]["content"]["application/json"]
+
+
+def _media_examples(where: str, media: dict):
+    if "example" in media:
+        yield (f"{where} example", media["schema"], media["example"])
+    for name, example in media.get("examples", {}).items():
+        yield (f"{where} {name}", media["schema"], example["value"])
+
+
+def _schema_examples(contract: dict):
+    for path, item in contract["paths"].items():
+        for method, operation in item.items():
+            where = f"{method.upper()} {path}"
+            for status, response in operation.get("responses", {}).items():
+                for media in response.get("content", {}).values():
+                    yield from _media_examples(f"{where} {status}", media)
+            for media in operation.get("requestBody", {}).get("content", {}).values():
+                yield from _media_examples(f"{where} request", media)
+
+
+@pytest.mark.parametrize(
+    ("where", "schema_", "value"),
+    list(_schema_examples(CONTRACT)),
+    ids=[where for where, _, _ in _schema_examples(CONTRACT)],
+)
+def test_contract_examples_are_valid_against_their_schema(
+    where: str, schema_: dict, value: object
+) -> None:
+    jsonschema.Draft202012Validator(
+        {**schema_, "components": CONTRACT.get("components", {})}
+    ).validate(value)

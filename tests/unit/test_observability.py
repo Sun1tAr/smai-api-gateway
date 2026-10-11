@@ -331,3 +331,24 @@ async def test_only_the_exact_service_paths_are_excluded_from_tracing(
     client_span = next(s for s in spans if s.kind == SpanKind.CLIENT)
     assert server.parent is None
     assert client_span.context.trace_id == server.context.trace_id
+
+
+async def test_successful_service_requests_are_logged_at_debug_only(
+    upstream: Recorder, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for level, expect_health in (("INFO", False), ("DEBUG", True)):
+        settings = Settings(
+            _env_file=None,
+            upstream_recipes_url="http://recipes:8000",
+            log_level=level,
+        )
+        app = create_app(settings, transport=httpx.MockTransport(upstream))
+        async with client_for(app) as client:
+            await client.get("/health")
+            await client.get("/metrics")
+            await client.get("/nope")
+        events = log_events(capsys.readouterr().out)
+        paths = {e["path"] for e in events if e["message"] == "http_request"}
+        assert ("/health" in paths) is expect_health
+        assert ("/metrics" in paths) is expect_health
+        assert "unmatched" in paths

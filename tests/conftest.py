@@ -8,6 +8,12 @@ from gateway.config import Settings
 from gateway.main import create_app
 
 
+# Тесты не за прокси: ключ лимита — адрес сокета. Проверки старта задают флаги сами.
+@pytest.fixture(autouse=True)
+def _socket_keyed_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_KEY_BY_SOCKET", "true")
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(_env_file=None, upstream_recipes_url="http://recipes:8000")

@@ -62,7 +62,9 @@ def metrics_path_item() -> dict:
             "summary": "Метрики Prometheus",
             "description": (
                 "Метрики gateway в текстовом формате Prometheus: HTTP-метрики по "
-                "шаблону пути и `gateway_upstream_*`. Не пробрасывать наружу."
+                "шаблону пути, `gateway_upstream_*`, `gateway_rate_limited_total`, "
+                "`gateway_rate_limit_tracked_keys` и "
+                "`gateway_client_ip_fallback_total`. Не пробрасывать наружу."
             ),
             "operationId": "get_metrics",
             "responses": {

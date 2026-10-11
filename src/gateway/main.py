@@ -16,7 +16,7 @@ from gateway.asgi import RequestContextMiddleware, StripTraceContext
 from gateway.config import Settings
 from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
-from gateway.metrics import UpstreamMetrics
+from gateway.metrics import RateLimitMetrics, UpstreamMetrics
 from gateway.observability import (
     configure_logging,
     create_tracer_provider,
@@ -24,6 +24,7 @@ from gateway.observability import (
     redact_span,
 )
 from gateway.proxy import UpstreamClient
+from gateway.ratelimit import LIMITED_ENDPOINTS, RateLimiter
 from gateway.routing import load_routes
 
 logger = structlog.get_logger()
@@ -53,6 +54,17 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("service_started")
+        if app.state.rate_limiter is not None and not settings.trusted_networks:
+            logger.warning("rate_limit_keyed_by_socket_address")
+        if settings.trusted_networks and settings.rate_limit_key_by_socket:
+            logger.warning("trusted_proxies_override_key_by_socket")
+        wide = [
+            str(net)
+            for net in settings.trusted_networks
+            if net.prefixlen < net.max_prefixlen
+        ]
+        if wide:
+            logger.warning("trusted_proxy_is_a_network", networks=wide)
         try:
             yield
         finally:
@@ -71,6 +83,30 @@ def create_app(
     app.state.settings = settings
     app.state.tracer_provider = provider
     app.state.upstream_client = client
+    limiter = (
+        RateLimiter(
+            requests=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=settings.rate_limit_max_keys,
+        )
+        if settings.rate_limit_enabled
+        else None
+    )
+    app.state.rate_limiter = limiter
+    app.state.global_limiter = RateLimiter(
+        requests=settings.rate_limit_global_requests,
+        window_seconds=settings.rate_limit_window_seconds,
+        max_keys=1,
+    )
+    app.state.rate_limit_metrics = RateLimitMetrics(
+        registry,
+        limited_routes=sorted({path for _, path in LIMITED_ENDPOINTS}),
+        tracked_keys=(
+            (lambda: app.state.rate_limiter.tracked_keys)
+            if limiter is not None
+            else None
+        ),
+    )
     register_error_handlers(app)
     app.include_router(health_router)
     register_routes(app, routes, contract, settings.max_request_body_bytes)
