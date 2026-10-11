@@ -160,24 +160,22 @@ def test_service_endpoints_are_documented_with_examples(schema: dict) -> None:
         assert "example" in responses["500"]["content"]["application/json"]
 
 
+def _media_examples(where: str, media: dict):
+    if "example" in media:
+        yield (f"{where} example", media["schema"], media["example"])
+    for name, example in media.get("examples", {}).items():
+        yield (f"{where} {name}", media["schema"], example["value"])
+
+
 def _schema_examples(contract: dict):
     for path, item in contract["paths"].items():
         for method, operation in item.items():
+            where = f"{method.upper()} {path}"
             for status, response in operation.get("responses", {}).items():
                 for media in response.get("content", {}).values():
-                    for name, example in media.get("examples", {}).items():
-                        yield (
-                            f"{method.upper()} {path} {status} {name}",
-                            media["schema"],
-                            example["value"],
-                        )
+                    yield from _media_examples(f"{where} {status}", media)
             for media in operation.get("requestBody", {}).get("content", {}).values():
-                for name, example in media.get("examples", {}).items():
-                    yield (
-                        f"{method.upper()} {path} request {name}",
-                        media["schema"],
-                        example["value"],
-                    )
+                yield from _media_examples(f"{where} request", media)
 
 
 @pytest.mark.parametrize(
