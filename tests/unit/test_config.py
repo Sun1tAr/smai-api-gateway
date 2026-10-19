@@ -42,6 +42,15 @@ def test_upstream_url_error_does_not_echo_the_value() -> None:
     assert "secret" not in str(error.value)
 
 
+def test_dictionary_url_with_a_path_is_rejected_and_named() -> None:
+    with pytest.raises(ValidationError) as error:
+        make(
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000/api",
+        )
+    assert "UPSTREAM_DICTIONARY_URL" in str(error.value)
+
+
 def test_empty_otlp_endpoint_disables_export() -> None:
     settings = make(
         upstream_recipes_url="http://recipes:8000",

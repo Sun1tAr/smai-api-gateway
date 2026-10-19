@@ -33,7 +33,7 @@
                             "title": "Name",
                             "description": "Название значения, уникальное внутри справочника.",
                             "examples": [
-                              "Веган"
+                              "Быстрые перекусы"
                             ]
                           }
                         },
@@ -95,7 +95,7 @@
                             "title": "Name",
                             "description": "Название значения, уникальное внутри справочника.",
                             "examples": [
-                              "Веган"
+                              "Глютен"
                             ]
                           }
                         },
@@ -126,7 +126,7 @@
                             "title": "Name",
                             "description": "Название значения, уникальное внутри справочника.",
                             "examples": [
-                              "Веган"
+                              "Плита"
                             ]
                           }
                         },
@@ -366,7 +366,7 @@
                           "additionalProperties": true,
                           "type": "object",
                           "title": "Details",
-                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic; значения и тексты исключений не возвращаются."
+                          "description": "Дополнительные сведения; может быть пустым."
                         }
                       },
                       "type": "object",
@@ -386,7 +386,7 @@
                     "error": {
                       "code": "INTERNAL_ERROR",
                       "details": {},
-                      "message": "Internal server error"
+                      "message": "Failed to load dictionaries"
                     }
                   }
                 },

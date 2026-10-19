@@ -76,7 +76,7 @@ curl --fail http://127.0.0.1:8080/metrics
 | `UPSTREAM_RECIPES_URL` | Адрес MS-4 без пути, например `http://recipes:8000` | обязательна |
 | `UPSTREAM_DICTIONARY_URL` | Адрес MS-2 (справочники) без пути, например `http://dictionary:8000` | обязательна |
 | `UPSTREAM_CONNECT_TIMEOUT_SECONDS` | Установка соединения | `3` |
-| `UPSTREAM_READ_TIMEOUT_SECONDS` | Ожидание данных от MS-4 | `10` |
+| `UPSTREAM_READ_TIMEOUT_SECONDS` | Ожидание данных от сервиса (MS-4 и MS-2) | `10` |
 | `UPSTREAM_WRITE_TIMEOUT_SECONDS` | Отправка запроса | `5` |
 | `UPSTREAM_POOL_TIMEOUT_SECONDS` | Ожидание свободного соединения из пула | `2` |
 | `UPSTREAM_TOTAL_TIMEOUT_SECONDS` | Общий дедлайн запроса к MS-4 | `12` |
@@ -111,11 +111,15 @@ curl --fail http://127.0.0.1:8080/metrics
    Формат: `"МЕТОД /путь/в/сервисе"`, `{name}` — один сегмент пути. Публичный путь —
    `/<prefix><путь в сервисе>`; при `prefix = ""` он совпадает с путём в сервисе
    (так опубликован `/dictionaries`). Пустой префикс не может занимать `/health`,
-   `/metrics`, `/docs` и пространства имён других префиксов.
+   `/metrics`, `/docs` и пространства имён других префиксов. Пустой префикс может
+   быть только у одного маршрута.
 2. Для нового сервиса добавьте поле `upstream_<имя>_url` в `Settings` и переменную
    окружения `UPSTREAM_<ИМЯ>_URL`.
 3. Опишите операцию в снимке контракта (`summary`, `description`, `requestBody`,
-   `responses` с примерами): без этого gateway не стартует.
+   `responses` с примерами): без этого gateway не стартует. Снимок не должен
+   содержать `$ref` (схемы вписываются внутрь). Новому сервису нужен свой снимок:
+   добавьте поле `contract_<имя>_file` (`CONTRACT_<ИМЯ>_FILE`) в `Settings` и
+   передайте его в `load_contracts(...)` в `main.py`.
 
 ## Безопасность прокси
 

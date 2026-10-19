@@ -137,7 +137,8 @@ def test_route_without_prefix_rejects_other_paths(raw: bytes) -> None:
 
 
 @pytest.mark.parametrize(
-    "path", ["/health", "/metrics", "/docs", "/{id}", "/recipes/x"]
+    "path",
+    ["/health", "/metrics", "/docs", "/redoc", "/openapi.json", "/{id}", "/recipes/x"],
 )
 def test_unprefixed_route_cannot_take_reserved_or_foreign_paths(
     tmp_path: Path, path: str
@@ -150,6 +151,30 @@ def test_unprefixed_route_cannot_take_reserved_or_foreign_paths(
         encoding="utf-8",
     )
     with pytest.raises(RouteConfigError):
+        load_routes(file, {"recipes"})
+
+
+def test_unprefixed_route_declared_before_a_prefixed_one_cannot_overlap(
+    tmp_path: Path,
+) -> None:
+    file = tmp_path / "routes.toml"
+    file.write_text(
+        '[[route]]\nprefix = ""\nupstream = "recipes"\nallow = ["GET /recipes/x"]\n'
+        '[[route]]\nprefix = "recipes"\nupstream = "recipes"\nallow = ["GET /a"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(RouteConfigError):
+        load_routes(file, {"recipes"})
+
+
+def test_only_one_unprefixed_route_is_allowed(tmp_path: Path) -> None:
+    file = tmp_path / "routes.toml"
+    file.write_text(
+        '[[route]]\nprefix = ""\nupstream = "recipes"\nallow = ["GET /a"]\n'
+        '[[route]]\nprefix = ""\nupstream = "recipes"\nallow = ["GET /b"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(RouteConfigError, match="duplicate route prefix"):
         load_routes(file, {"recipes"})
 
 

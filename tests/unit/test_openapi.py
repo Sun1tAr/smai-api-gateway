@@ -220,3 +220,27 @@ def test_contract_examples_are_valid_against_their_schema(
     jsonschema.Draft202012Validator(
         {**schema_, "components": CONTRACT.get("components", {})}
     ).validate(value)
+
+
+def test_contract_without_paths_is_a_contract_error(tmp_path: Path) -> None:
+    from gateway.api import ContractError, load_contracts
+
+    for text in ("{}", '{"paths": null}', "[]"):
+        file = tmp_path / "c.json"
+        file.write_text(text, "utf-8")
+        with pytest.raises(ContractError):
+            load_contracts(file)
+
+
+def test_contract_with_ref_is_rejected(tmp_path: Path) -> None:
+    from gateway.api import ContractError, load_contracts
+
+    contract = json.loads(json.dumps(DICTIONARY_CONTRACT))
+    op = contract["paths"]["/dictionaries"]["get"]
+    op["responses"]["500"]["content"]["application/json"]["schema"] = {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
+    file = tmp_path / "c.json"
+    file.write_text(json.dumps(contract), "utf-8")
+    with pytest.raises(ContractError, match=r"\$ref"):
+        load_contracts(file)

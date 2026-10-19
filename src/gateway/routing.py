@@ -9,7 +9,6 @@ RESERVED_PREFIXES = frozenset({"health", "metrics", "docs", "redoc", "openapi.js
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 
 _PREFIX = re.compile(r"[a-z][a-z0-9-]*")
-_FIRST_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
 _LITERAL = re.compile(r"[A-Za-z0-9._~-]+")
 _PARAM = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 # Один сегмент пути: незарезервированные символы или корректный %XX.
@@ -96,7 +95,7 @@ def load_routes(path: Path, configured_upstreams: Collection[str]) -> tuple[Rout
         for endpoint in endpoints:
             first = endpoint.gateway_path[1:].split("/")[0]
             if not prefix and (
-                not _FIRST_SEGMENT.fullmatch(first) or first in RESERVED_PREFIXES
+                not _LITERAL.fullmatch(first) or first in RESERVED_PREFIXES
             ):
                 raise RouteConfigError(f"path is reserved or ambiguous: {first!r}")
             key = (endpoint.method, endpoint.gateway_path)
