@@ -53,6 +53,35 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ContractError(f"cannot read contract: {type(error).__name__}") from None
 
 
+def _has_ref(node: Any) -> bool:
+    if isinstance(node, dict):
+        return "$ref" in node or any(_has_ref(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_ref(value) for value in node)
+    return False
+
+
+def load_contracts(*paths: Path) -> dict[str, Any]:
+    """Склеивает пути нескольких снимков; один путь в двух снимках — ошибка.
+
+    Берутся только `paths`, `components` не переносятся, поэтому `$ref` в снимке
+    оборвался бы в итоговой схеме: такой снимок отклоняется.
+    """
+    merged: dict[str, Any] = {"paths": {}}
+    for path in paths:
+        contract = load_contract(path)
+        contract_paths = contract.get("paths") if isinstance(contract, dict) else None
+        if not isinstance(contract_paths, dict):
+            raise ContractError(f"{path.name}: contract has no paths")
+        if _has_ref(contract_paths):
+            raise ContractError(f"{path.name}: $ref is not supported, inline schemas")
+        for upstream_path, item in contract_paths.items():
+            if upstream_path in merged["paths"]:
+                raise ContractError(f"contracts define {upstream_path} twice")
+            merged["paths"][upstream_path] = item
+    return merged
+
+
 # Ошибки, которые отвечает сам gateway: описание, code, message и reason в details.
 _GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
     400: (
@@ -310,7 +339,7 @@ def _register(
         handler,
         methods=[endpoint.method],
         operation_id=f"{endpoint.method.lower()}_{slug}",
-        tags=[endpoint.prefix],
+        tags=[endpoint.prefix or endpoint.upstream],
         response_class=Response,
         dependencies=[Depends(edge_guard)],
         **docs,

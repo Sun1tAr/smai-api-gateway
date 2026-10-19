@@ -54,6 +54,7 @@ def open_gateway() -> Callable[..., object]:
         settings = Settings(
             _env_file=None,
             upstream_recipes_url=upstream_url,
+            upstream_dictionary_url="http://dictionary:8000",
             upstream_read_timeout_seconds=0.3,
             upstream_total_timeout_seconds=1,
             **overrides,

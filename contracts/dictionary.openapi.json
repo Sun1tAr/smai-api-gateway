@@ -1,0 +1,407 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "smai-api-dictionary (контракт MS-2, снимок)",
+    "version": "v2",
+    "description": "Снимок контракта API-7 (SMAI-A-194), собран из OpenAPI MS-2 (SMAI-86). Заменяется экспортом OpenAPI из MS-2. $ref в снимках контрактов не допускается."
+  },
+  "paths": {
+    "/dictionaries": {
+      "get": {
+        "summary": "Получение справочников (API-7)",
+        "description": "Возвращает одним ответом четыре фиксированных справочника для экранов параметров: пищевые привычки (`habits`), диеты (`diets`), аллергены (`allergies`) и кухонную технику (`kitchenTools`). Каждый элемент — `{id, name}`; `id` стабилен, элементы упорядочены по `id`. Параметров нет, лишние query-параметры игнорируются. Данные читаются одним согласованным снимком БД.",
+        "responses": {
+          "200": {
+            "description": "Справочники получены.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "habits": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "title": "Id",
+                            "description": "Стабильный идентификатор значения, уникальный внутри справочника.",
+                            "examples": [
+                              1
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "title": "Name",
+                            "description": "Название значения, уникальное внутри справочника.",
+                            "examples": [
+                              "Быстрые перекусы"
+                            ]
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "title": "DictionaryItem"
+                      },
+                      "type": "array",
+                      "title": "Habits",
+                      "description": "Справочник пищевых привычек (LE-7)."
+                    },
+                    "diets": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "title": "Id",
+                            "description": "Стабильный идентификатор значения, уникальный внутри справочника.",
+                            "examples": [
+                              1
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "title": "Name",
+                            "description": "Название значения, уникальное внутри справочника.",
+                            "examples": [
+                              "Веган"
+                            ]
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "title": "DictionaryItem"
+                      },
+                      "type": "array",
+                      "title": "Diets",
+                      "description": "Справочник диет (LE-8)."
+                    },
+                    "allergies": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "title": "Id",
+                            "description": "Стабильный идентификатор значения, уникальный внутри справочника.",
+                            "examples": [
+                              1
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "title": "Name",
+                            "description": "Название значения, уникальное внутри справочника.",
+                            "examples": [
+                              "Глютен"
+                            ]
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "title": "DictionaryItem"
+                      },
+                      "type": "array",
+                      "title": "Allergies",
+                      "description": "Справочник аллергенов (LE-9)."
+                    },
+                    "kitchenTools": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "title": "Id",
+                            "description": "Стабильный идентификатор значения, уникальный внутри справочника.",
+                            "examples": [
+                              1
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "title": "Name",
+                            "description": "Название значения, уникальное внутри справочника.",
+                            "examples": [
+                              "Плита"
+                            ]
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "title": "DictionaryItem"
+                      },
+                      "type": "array",
+                      "title": "Kitchentools",
+                      "description": "Справочник кухонной техники (LE-10)."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "habits",
+                    "diets",
+                    "allergies",
+                    "kitchenTools"
+                  ],
+                  "title": "DictionariesResponse"
+                },
+                "example": {
+                  "allergies": [
+                    {
+                      "id": 1,
+                      "name": "Глютен"
+                    },
+                    {
+                      "id": 2,
+                      "name": "Лактоза"
+                    },
+                    {
+                      "id": 3,
+                      "name": "Яйца"
+                    },
+                    {
+                      "id": 4,
+                      "name": "Арахис"
+                    },
+                    {
+                      "id": 5,
+                      "name": "Древесные орехи"
+                    },
+                    {
+                      "id": 6,
+                      "name": "Соя"
+                    },
+                    {
+                      "id": 7,
+                      "name": "Рыба"
+                    },
+                    {
+                      "id": 8,
+                      "name": "Ракообразные"
+                    },
+                    {
+                      "id": 9,
+                      "name": "Моллюски"
+                    },
+                    {
+                      "id": 10,
+                      "name": "Кунжут"
+                    },
+                    {
+                      "id": 11,
+                      "name": "Горчица"
+                    },
+                    {
+                      "id": 12,
+                      "name": "Сельдерей"
+                    },
+                    {
+                      "id": 13,
+                      "name": "Люпин"
+                    },
+                    {
+                      "id": 14,
+                      "name": "Сульфиты"
+                    },
+                    {
+                      "id": 15,
+                      "name": "Пшеница"
+                    },
+                    {
+                      "id": 16,
+                      "name": "Кукуруза"
+                    },
+                    {
+                      "id": 17,
+                      "name": "Мёд"
+                    },
+                    {
+                      "id": 18,
+                      "name": "Цитрусовые"
+                    },
+                    {
+                      "id": 19,
+                      "name": "Какао / шоколад"
+                    },
+                    {
+                      "id": 20,
+                      "name": "Клубника"
+                    }
+                  ],
+                  "diets": [
+                    {
+                      "id": 1,
+                      "name": "Веган"
+                    },
+                    {
+                      "id": 2,
+                      "name": "Вегетарианец"
+                    },
+                    {
+                      "id": 3,
+                      "name": "Кето"
+                    },
+                    {
+                      "id": 4,
+                      "name": "Средиземноморская"
+                    }
+                  ],
+                  "habits": [
+                    {
+                      "id": 1,
+                      "name": "Быстрые перекусы"
+                    },
+                    {
+                      "id": 2,
+                      "name": "Низкокалорийные блюда"
+                    },
+                    {
+                      "id": 3,
+                      "name": "Полезная еда"
+                    },
+                    {
+                      "id": 4,
+                      "name": "Еда с собой"
+                    },
+                    {
+                      "id": 5,
+                      "name": "Высокобелковая"
+                    },
+                    {
+                      "id": 6,
+                      "name": "Для семейных приёмов пищи"
+                    }
+                  ],
+                  "kitchenTools": [
+                    {
+                      "id": 1,
+                      "name": "Плита"
+                    },
+                    {
+                      "id": 2,
+                      "name": "Духовка"
+                    },
+                    {
+                      "id": 3,
+                      "name": "Микроволновая печь"
+                    },
+                    {
+                      "id": 4,
+                      "name": "Аэрогриль"
+                    },
+                    {
+                      "id": 5,
+                      "name": "Мультиварка"
+                    },
+                    {
+                      "id": 6,
+                      "name": "Блендер"
+                    },
+                    {
+                      "id": 7,
+                      "name": "Тостер"
+                    },
+                    {
+                      "id": 8,
+                      "name": "Пароварка"
+                    },
+                    {
+                      "id": 9,
+                      "name": "Электрический гриль"
+                    },
+                    {
+                      "id": 10,
+                      "name": "Фритюрница"
+                    },
+                    {
+                      "id": 11,
+                      "name": "Миксер"
+                    },
+                    {
+                      "id": 12,
+                      "name": "Су-вид"
+                    },
+                    {
+                      "id": 13,
+                      "name": "Вафельница"
+                    },
+                    {
+                      "id": 14,
+                      "name": "Хлебопечка"
+                    },
+                    {
+                      "id": 15,
+                      "name": "Кофемашина"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка при получении справочников, например БД недоступна.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Failed to load dictionaries"
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to load dictionaries",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

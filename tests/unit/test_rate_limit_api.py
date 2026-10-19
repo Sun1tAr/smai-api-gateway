@@ -31,7 +31,10 @@ def build(upstream: Recorder, clock: Clock | None = None, **overrides):
         **overrides,
     }
     settings = Settings(
-        _env_file=None, upstream_recipes_url="http://recipes:8000", **values
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+        **values,
     )
     app = create_app(settings, transport=httpx.MockTransport(upstream))
     if clock is not None and app.state.rate_limiter is not None:
@@ -247,7 +250,12 @@ async def test_startup_warns_when_the_key_is_the_socket_address(
 )
 def test_invalid_rate_limit_settings_stop_the_start(bad: dict) -> None:
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, upstream_recipes_url="http://recipes:8000", **bad)
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+            **bad,
+        )
 
 
 # --- общий потолок, возврат слота, разбор клиента ---------------------------------
@@ -303,6 +311,7 @@ async def test_connect_and_pool_failures_return_the_slot(failure: Exception) -> 
     settings = Settings(
         _env_file=None,
         upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
         rate_limit_requests=1,
     )
     app = create_app(settings, transport=httpx.MockTransport(handler))
@@ -323,6 +332,7 @@ async def test_timeouts_and_broken_replies_still_cost_a_slot(
     settings = Settings(
         _env_file=None,
         upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
         rate_limit_requests=1,
     )
     app = create_app(settings, transport=httpx.MockTransport(handler))
@@ -493,7 +503,11 @@ def test_enabled_limit_needs_an_explicit_key_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("RATE_LIMIT_KEY_BY_SOCKET")
-    base = {"_env_file": None, "upstream_recipes_url": "http://recipes:8000"}
+    base = {
+        "_env_file": None,
+        "upstream_recipes_url": "http://recipes:8000",
+        "upstream_dictionary_url": "http://dictionary:8000",
+    }
     with pytest.raises(ValidationError, match="TRUSTED_PROXIES"):
         Settings(**base)
     with pytest.raises(ValidationError):
@@ -515,7 +529,12 @@ def test_enabled_limit_needs_an_explicit_key_mode(
 )
 def test_unsafe_rate_limit_settings_stop_the_start(bad: dict) -> None:
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, upstream_recipes_url="http://recipes:8000", **bad)
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+            **bad,
+        )
 
 
 def test_a_renamed_limited_route_stops_the_start(settings: Settings, tmp_path) -> None:

@@ -16,7 +16,11 @@ def _socket_keyed_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None, upstream_recipes_url="http://recipes:8000")
+    return Settings(
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+    )
 
 
 class Chunks(httpx.AsyncByteStream):

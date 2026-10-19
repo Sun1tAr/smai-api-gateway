@@ -116,6 +116,7 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         assert (await gateway.get("/docs")).status_code == 200
         schema = (await gateway.get("/openapi.json")).json()
     assert set(schema["paths"]) == {
+        "/dictionaries",
         "/health",
         "/metrics",
         "/recipes/generate-menu",
