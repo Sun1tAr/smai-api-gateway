@@ -79,10 +79,10 @@ curl --fail http://127.0.0.1:8080/metrics
 | `UPSTREAM_READ_TIMEOUT_SECONDS` | Ожидание данных от сервиса (MS-4 и MS-2) | `10` |
 | `UPSTREAM_WRITE_TIMEOUT_SECONDS` | Отправка запроса | `5` |
 | `UPSTREAM_POOL_TIMEOUT_SECONDS` | Ожидание свободного соединения из пула | `2` |
-| `UPSTREAM_TOTAL_TIMEOUT_SECONDS` | Общий дедлайн запроса к MS-4 | `12` |
+| `UPSTREAM_TOTAL_TIMEOUT_SECONDS` | Общий дедлайн запроса к MS-4 и MS-2 | `12` |
 | `UPSTREAM_MAX_CONNECTIONS` | Размер пула | `100` |
-| `UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | Простой keep-alive; меньше таймаута сервера MS-4 | `2` |
-| `UPSTREAM_MAX_RESPONSE_BYTES` | Предел ответа MS-4 | `2097152` |
+| `UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | Простой keep-alive; меньше таймаута серверов MS-4 и MS-2 | `2` |
+| `UPSTREAM_MAX_RESPONSE_BYTES` | Предел ответа MS-4 и MS-2 | `2097152` |
 | `MAX_REQUEST_BODY_BYTES` | Предел тела запроса клиента | `65536` |
 | `RATE_LIMIT_ENABLED` | Включает лимит на `POST /recipes/generate-menu` (`false` — отключён, схема `/docs` не меняется) | `true` |
 | `RATE_LIMIT_GLOBAL_REQUESTS` | Общий потолок на всех клиентов за окно | `100` |

@@ -150,7 +150,9 @@ def test_unprefixed_route_cannot_take_reserved_or_foreign_paths(
         f'[[route]]\nprefix = ""\nupstream = "recipes"\nallow = ["GET {path}"]\n',
         encoding="utf-8",
     )
-    with pytest.raises(RouteConfigError):
+    with pytest.raises(
+        RouteConfigError, match="reserved or ambiguous|overlaps|invalid path segment"
+    ):
         load_routes(file, {"recipes"})
 
 

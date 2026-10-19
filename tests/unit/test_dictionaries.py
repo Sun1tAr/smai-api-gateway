@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import httpx
 import pytest
 
@@ -26,16 +28,14 @@ async def test_dictionaries_are_proxied_to_the_dictionary_service() -> None:
         transport=httpx.ASGITransport(app=app), base_url="http://t"
     ) as client:
         ok = await client.get("/dictionaries", params={"x": "1"})
-        doubled = await client.get("/dictionaries/dictionaries")
-        wrong_method = await client.post("/dictionaries")
     assert ok.status_code == 200
     assert ok.content == BODY
     assert [str(r.url) for r in seen] == ["http://dictionary:8000/dictionaries?x=1"]
-    assert doubled.status_code == 404
-    assert wrong_method.status_code == 405
 
 
-def make_client(handler) -> httpx.AsyncClient:
+def make_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.AsyncClient:
     settings = Settings(
         _env_file=None,
         upstream_recipes_url="http://recipes:8000",

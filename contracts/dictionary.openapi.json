@@ -3,7 +3,7 @@
   "info": {
     "title": "smai-api-dictionary (контракт MS-2, снимок)",
     "version": "v2",
-    "description": "Снимок контракта API-7 (SMAI-A-194), собран из OpenAPI MS-2 (SMAI-86). Заменяется экспортом OpenAPI из MS-2."
+    "description": "Снимок контракта API-7 (SMAI-A-194), собран из OpenAPI MS-2 (SMAI-86). Заменяется экспортом OpenAPI из MS-2. $ref в снимках контрактов не допускается."
   },
   "paths": {
     "/dictionaries": {
