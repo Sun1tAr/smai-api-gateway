@@ -21,7 +21,10 @@ Handler = Callable[[httpx.Request], httpx.Response]
 
 def make_client(handler: Handler, **overrides: object) -> UpstreamClient:
     settings = Settings(
-        _env_file=None, upstream_recipes_url="http://recipes:8000", **overrides
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+        **overrides,
     )
     return UpstreamClient(
         settings,
@@ -169,6 +172,7 @@ async def test_pool_and_keepalive_limits_reach_the_transport() -> None:
     settings = Settings(
         _env_file=None,
         upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
         upstream_max_connections=7,
         upstream_keepalive_expiry_seconds=3,
     )
@@ -208,7 +212,11 @@ async def test_upstream_up_gauge_drops_only_when_the_service_is_unreachable(
         raise failure
 
     registry = CollectorRegistry()
-    settings = Settings(_env_file=None, upstream_recipes_url="http://recipes:8000")
+    settings = Settings(
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+    )
     client = UpstreamClient(
         settings,
         {"recipes": "http://recipes:8000"},
@@ -232,6 +240,7 @@ async def test_response_too_large_keeps_the_gauge_up() -> None:
     settings = Settings(
         _env_file=None,
         upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
         upstream_max_response_bytes=1024,
     )
     client = UpstreamClient(

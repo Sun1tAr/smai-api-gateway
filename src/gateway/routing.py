@@ -9,6 +9,7 @@ RESERVED_PREFIXES = frozenset({"health", "metrics", "docs", "redoc", "openapi.js
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 
 _PREFIX = re.compile(r"[a-z][a-z0-9-]*")
+_FIRST_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
 _LITERAL = re.compile(r"[A-Za-z0-9._~-]+")
 _PARAM = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 # Один сегмент пути: незарезервированные символы или корректный %XX.
@@ -32,7 +33,10 @@ class Endpoint:
 
     @property
     def gateway_path(self) -> str:
-        return f"/{self.prefix}{self.upstream_path}"
+        # Пустой prefix: сервис публикуется под своим же путём, без добавки.
+        return (
+            f"/{self.prefix}{self.upstream_path}" if self.prefix else self.upstream_path
+        )
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,9 @@ def load_routes(path: Path, configured_upstreams: Collection[str]) -> tuple[Rout
             entry.get("upstream"),
             entry.get("allow"),
         )
-        if not isinstance(prefix, str) or not _PREFIX.fullmatch(prefix):
+        if not isinstance(prefix, str) or not (
+            prefix == "" or _PREFIX.fullmatch(prefix)
+        ):
             raise RouteConfigError(f"invalid route prefix: {prefix!r}")
         if prefix in RESERVED_PREFIXES:
             raise RouteConfigError(f"route prefix is reserved: {prefix!r}")
@@ -88,12 +94,23 @@ def load_routes(path: Path, configured_upstreams: Collection[str]) -> tuple[Rout
             raise RouteConfigError(f"route {prefix!r} must allow at least one path")
         endpoints = tuple(_parse_endpoint(prefix, upstream, item) for item in allow)
         for endpoint in endpoints:
+            first = endpoint.gateway_path[1:].split("/")[0]
+            if not prefix and (
+                not _FIRST_SEGMENT.fullmatch(first) or first in RESERVED_PREFIXES
+            ):
+                raise RouteConfigError(f"path is reserved or ambiguous: {first!r}")
             key = (endpoint.method, endpoint.gateway_path)
             if key in seen:
                 raise RouteConfigError(f"duplicate endpoint: {key}")
             seen.add(key)
         prefixes.add(prefix)
         routes.append(Route(prefix=prefix, upstream=upstream, endpoints=endpoints))
+    # Путь без префикса не должен заходить в пространство имён другого маршрута.
+    for route in routes:
+        for endpoint in route.endpoints:
+            first = endpoint.gateway_path[1:].split("/")[0]
+            if not route.prefix and first in prefixes:
+                raise RouteConfigError(f"path overlaps route prefix: {first!r}")
     return tuple(routes)
 
 
@@ -125,15 +142,16 @@ def upstream_target(endpoint: Endpoint, raw_path: bytes, query: bytes = b"") -> 
     gateway = endpoint.gateway_path[1:].split("/")
     if len(actual) != len(gateway):
         raise InvalidPath("path does not match the endpoint")
-    if actual[0] != gateway[0]:
-        raise InvalidPath("path does not match the endpoint")
     parts: list[str] = []
-    for given, expected in zip(actual[1:], gateway[1:], strict=True):
+    for given, expected in zip(actual, gateway, strict=True):
         if _PARAM.fullmatch(expected):
             _check_param_segment(given)
         elif given != expected:
             raise InvalidPath("path does not match the endpoint")
         parts.append(given)
+    # Первый сегмент — префикс gateway; его в сервис не передаём.
+    if endpoint.prefix:
+        parts = parts[1:]
     if any(byte < 0x21 or byte > 0x7E for byte in query):
         raise InvalidPath("invalid characters in query")
     target = b"/" + "/".join(parts).encode("ascii")

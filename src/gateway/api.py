@@ -53,6 +53,17 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ContractError(f"cannot read contract: {type(error).__name__}") from None
 
 
+def load_contracts(*paths: Path) -> dict[str, Any]:
+    """Склеивает пути нескольких снимков; один путь в двух снимках — ошибка."""
+    merged: dict[str, Any] = {"paths": {}}
+    for path in paths:
+        for upstream_path, item in load_contract(path)["paths"].items():
+            if upstream_path in merged["paths"]:
+                raise ContractError(f"contracts define {upstream_path} twice")
+            merged["paths"][upstream_path] = item
+    return merged
+
+
 # Ошибки, которые отвечает сам gateway: описание, code, message и reason в details.
 _GATEWAY_ERRORS: dict[int, tuple[str, str, str, str | None]] = {
     400: (
@@ -310,7 +321,7 @@ def _register(
         handler,
         methods=[endpoint.method],
         operation_id=f"{endpoint.method.lower()}_{slug}",
-        tags=[endpoint.prefix],
+        tags=[endpoint.prefix or endpoint.upstream],
         response_class=Response,
         dependencies=[Depends(edge_guard)],
         **docs,

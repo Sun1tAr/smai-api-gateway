@@ -9,6 +9,9 @@ from gateway.config import Settings
 from gateway.main import create_app
 
 CONTRACT = json.loads(Path("contracts/receipes.openapi.json").read_text("utf-8"))
+DICTIONARY_CONTRACT = json.loads(
+    Path("contracts/dictionary.openapi.json").read_text("utf-8")
+)
 OPERATIONS = [
     ("/recipes/generate-menu", "post", "/generate-menu"),
     ("/recipes/generate-menu/{task_id}", "get", "/generate-menu/{task_id}"),
@@ -48,7 +51,35 @@ def test_documented_paths_equal_the_allowlist(schema: dict) -> None:
         for method in item
         if path not in ("/health", "/metrics")
     }
-    assert documented == {(path, method) for path, method, _ in OPERATIONS}
+    assert documented == {(path, method) for path, method, _ in OPERATIONS} | {
+        ("/dictionaries", "get")
+    }
+
+
+def test_dictionaries_are_documented_under_their_own_path(schema: dict) -> None:
+    operation = schema["paths"]["/dictionaries"]["get"]
+    expected = DICTIONARY_CONTRACT["paths"]["/dictionaries"]["get"]
+    assert operation["summary"] == expected["summary"]
+    assert operation["tags"] == ["dictionary"]
+    assert set(operation["responses"]) == {"200", "400", "500", "502", "503", "504"}
+    ok = operation["responses"]["200"]["content"]["application/json"]
+    assert ok == expected["responses"]["200"]["content"]["application/json"]
+    assert set(ok["example"]) == {"habits", "diets", "allergies", "kitchenTools"}
+    for status, response in operation["responses"].items():
+        media = response["content"]["application/json"]
+        assert "example" in media or "examples" in media, status
+    example = operation["responses"]["502"]["content"]["application/json"]["example"]
+    assert example["error"]["details"]["upstream"] == "dictionary"
+
+
+def test_same_path_in_two_contracts_is_fatal(settings: Settings) -> None:
+    from gateway.api import ContractError
+
+    clash = settings.model_copy(
+        update={"contract_dictionary_file": settings.contract_file}
+    )
+    with pytest.raises(ContractError):
+        create_app(clash)
 
 
 @pytest.mark.parametrize(("path", "method", "upstream_path"), OPERATIONS)

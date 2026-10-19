@@ -100,7 +100,13 @@ async def test_wrong_method_is_405_with_allow() -> None:
 
 
 async def test_create_app_uses_the_same_format() -> None:
-    app = create_app(Settings(_env_file=None, upstream_recipes_url="http://r:8000"))
+    app = create_app(
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://r:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+        )
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         response = await client.get("/missing")

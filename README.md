@@ -15,6 +15,7 @@ MS-1 — API Gateway SmartMeal: единая точка входа для кли
 | --- | --- | --- | --- |
 | `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}` | API-1 (SMAI-A-121) |
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}` | API-2 (SMAI-A-127) |
+| `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `GET /health` | — | 200 `{"status":"ok"}` | liveness gateway |
 | `GET /metrics` | — | 200, формат Prometheus | не пробрасывать наружу через NetBird |
 | `GET /docs`, `GET /openapi.json` | — | Swagger UI и схема | все эндпоинты с примерами и ошибками |
@@ -73,6 +74,7 @@ curl --fail http://127.0.0.1:8080/metrics
 | Переменная | Назначение | По умолчанию |
 | --- | --- | --- |
 | `UPSTREAM_RECIPES_URL` | Адрес MS-4 без пути, например `http://recipes:8000` | обязательна |
+| `UPSTREAM_DICTIONARY_URL` | Адрес MS-2 (справочники) без пути, например `http://dictionary:8000` | обязательна |
 | `UPSTREAM_CONNECT_TIMEOUT_SECONDS` | Установка соединения | `3` |
 | `UPSTREAM_READ_TIMEOUT_SECONDS` | Ожидание данных от MS-4 | `10` |
 | `UPSTREAM_WRITE_TIMEOUT_SECONDS` | Отправка запроса | `5` |
@@ -92,6 +94,7 @@ curl --fail http://127.0.0.1:8080/metrics
 | `TRUSTED_PROXIES` | Точные адреса прокси (CIDR) через запятую, которым верим в `X-Forwarded-For`; обязателен при включённом лимите, если нет `RATE_LIMIT_KEY_BY_SOCKET` | пусто |
 | `ROUTES_FILE` | Файл маршрутов | `config/routes.toml` |
 | `CONTRACT_FILE` | Снимок контракта MS-4 для документации | `contracts/receipes.openapi.json` |
+| `CONTRACT_DICTIONARY_FILE` | Снимок контракта MS-2 для документации | `contracts/dictionary.openapi.json` |
 | `LOG_LEVEL` | DEBUG / INFO / WARNING / ERROR | `INFO` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Базовый адрес OTLP HTTP, например `http://collector:4318` | экспорт отключён |
 | `GATEWAY_HTTP_PORT` | Порт на 127.0.0.1 в локальном Compose | `8080` |
@@ -105,7 +108,10 @@ curl --fail http://127.0.0.1:8080/metrics
 ## Как добавить путь или сервис
 
 1. Добавьте строку в `allow` (или новый `[[route]]`) в `config/routes.toml`.
-   Формат: `"МЕТОД /путь/в/сервисе"`, `{name}` — один сегмент пути.
+   Формат: `"МЕТОД /путь/в/сервисе"`, `{name}` — один сегмент пути. Публичный путь —
+   `/<prefix><путь в сервисе>`; при `prefix = ""` он совпадает с путём в сервисе
+   (так опубликован `/dictionaries`). Пустой префикс не может занимать `/health`,
+   `/metrics`, `/docs` и пространства имён других префиксов.
 2. Для нового сервиса добавьте поле `upstream_<имя>_url` в `Settings` и переменную
    окружения `UPSTREAM_<ИМЯ>_URL`.
 3. Опишите операцию в снимке контракта (`summary`, `description`, `requestBody`,

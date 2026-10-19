@@ -11,7 +11,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from starlette.types import ASGIApp
 
 from gateway import __version__
-from gateway.api import install_openapi, load_contract, register_routes
+from gateway.api import install_openapi, load_contracts, register_routes
 from gateway.asgi import RequestContextMiddleware, StripTraceContext
 from gateway.config import Settings
 from gateway.errors import register_error_handlers
@@ -40,7 +40,7 @@ def create_app(
     provider = create_tracer_provider(settings)
     upstreams = settings.upstream_urls()
     routes = load_routes(settings.routes_file, upstreams)
-    contract = load_contract(settings.contract_file)
+    contract = load_contracts(settings.contract_file, settings.contract_dictionary_file)
     registry = CollectorRegistry()
     client = UpstreamClient(
         settings, upstreams, transport=transport, metrics=UpstreamMetrics(registry)

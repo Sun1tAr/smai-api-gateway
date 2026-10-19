@@ -7,3 +7,11 @@ allow = [
     "POST /generate-menu",
     "GET /generate-menu/{task_id}",
 ]
+
+# Путь словаря на gateway совпадает с путём сервиса, поэтому префикс пустой.
+[[route]]
+prefix = ""
+upstream = "dictionary"
+allow = [
+    "GET /dictionaries",
+]

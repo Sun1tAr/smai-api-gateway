@@ -2,7 +2,13 @@ from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gateway.ratelimit import Network, parse_networks
@@ -17,6 +23,7 @@ class Settings(BaseSettings):
     )
 
     upstream_recipes_url: AnyHttpUrl
+    upstream_dictionary_url: AnyHttpUrl
     upstream_connect_timeout_seconds: float = Field(default=3, gt=0, le=60)
     upstream_read_timeout_seconds: float = Field(default=10, gt=0, le=120)
     upstream_write_timeout_seconds: float = Field(default=5, gt=0, le=60)
@@ -39,6 +46,7 @@ class Settings(BaseSettings):
     trusted_proxies: str = ""
     routes_file: Path = Path("config/routes.toml")
     contract_file: Path = Path("contracts/receipes.openapi.json")
+    contract_dictionary_file: Path = Path("contracts/dictionary.openapi.json")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     otel_exporter_otlp_endpoint: AnyHttpUrl | None = None
 
@@ -78,11 +86,12 @@ class Settings(BaseSettings):
         return self
 
     # Базовый адрес сервиса без пути: путь целиком задаёт таблица маршрутов.
-    @field_validator("upstream_recipes_url")
+    @field_validator("upstream_recipes_url", "upstream_dictionary_url")
     @classmethod
-    def origin_only(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+    def origin_only(cls, value: AnyHttpUrl, info: ValidationInfo) -> AnyHttpUrl:
         if value.path not in (None, "", "/") or value.query or value.fragment:
-            raise ValueError("UPSTREAM_RECIPES_URL must not contain a path or query")
+            name = (info.field_name or "").upper()
+            raise ValueError(f"{name} must not contain a path or query")
         return value
 
     # Имя upstream из routes.toml сопоставляется с переменной окружения.

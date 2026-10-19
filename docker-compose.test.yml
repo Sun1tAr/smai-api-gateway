@@ -16,6 +16,7 @@ services:
       target: production
     environment:
       UPSTREAM_RECIPES_URL: http://recipes:8000
+      UPSTREAM_DICTIONARY_URL: http://dictionary:8000
       # Smoke-тесты шлют много запросов подряд и не проверяют лимит.
       RATE_LIMIT_ENABLED: "false"
     depends_on:

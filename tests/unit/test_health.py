@@ -7,7 +7,13 @@ from gateway.main import create_app
 
 @pytest.mark.parametrize("upstream", ["http://127.0.0.1:9", "http://recipes:8000"])
 async def test_health_does_not_depend_on_upstream(upstream: str) -> None:
-    app = create_app(Settings(_env_file=None, upstream_recipes_url=upstream))
+    app = create_app(
+        Settings(
+            _env_file=None,
+            upstream_recipes_url=upstream,
+            upstream_dictionary_url="http://dictionary:8000",
+        )
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -17,7 +23,13 @@ async def test_health_does_not_depend_on_upstream(upstream: str) -> None:
 
 
 async def test_health_is_documented() -> None:
-    app = create_app(Settings(_env_file=None, upstream_recipes_url="http://r:8000"))
+    app = create_app(
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://r:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+        )
+    )
     operation = app.openapi()["paths"]["/health"]["get"]
     assert operation["summary"]
     assert operation["description"]

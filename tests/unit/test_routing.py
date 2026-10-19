@@ -107,12 +107,50 @@ allow = ["POST /generate-menu", "GET /generate-menu/{task_id}"]
 
 
 def test_default_routes_file_is_valid() -> None:
-    routes = load_routes(Path("config/routes.toml"), {"recipes"})
+    routes = load_routes(Path("config/routes.toml"), {"recipes", "dictionary"})
     assert [e.gateway_path for e in routes[0].endpoints] == [
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
     ]
     assert [e.method for e in routes[0].endpoints] == ["POST", "GET"]
+    assert [e.gateway_path for e in routes[1].endpoints] == ["/dictionaries"]
+
+
+GET_DICTIONARIES = Endpoint("GET", "", "dictionary", "/dictionaries")
+
+
+def test_route_without_prefix_keeps_the_service_path() -> None:
+    assert GET_DICTIONARIES.gateway_path == "/dictionaries"
+    assert upstream_target(GET_DICTIONARIES, b"/dictionaries") == b"/dictionaries"
+    assert (
+        upstream_target(GET_DICTIONARIES, b"/dictionaries", b"a=1")
+        == b"/dictionaries?a=1"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw", [b"/dictionaries/dictionaries", b"/dictionaries/", b"/other", b"/"]
+)
+def test_route_without_prefix_rejects_other_paths(raw: bytes) -> None:
+    with pytest.raises(InvalidPath):
+        upstream_target(GET_DICTIONARIES, raw)
+
+
+@pytest.mark.parametrize(
+    "path", ["/health", "/metrics", "/docs", "/{id}", "/recipes/x"]
+)
+def test_unprefixed_route_cannot_take_reserved_or_foreign_paths(
+    tmp_path: Path, path: str
+) -> None:
+    file = tmp_path / "routes.toml"
+    file.write_text(
+        '[[route]]\nprefix = "recipes"\nupstream = "recipes"\n'
+        'allow = ["GET /a"]\n'
+        f'[[route]]\nprefix = ""\nupstream = "recipes"\nallow = ["GET {path}"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(RouteConfigError):
+        load_routes(file, {"recipes"})
 
 
 @pytest.mark.parametrize(

@@ -340,6 +340,7 @@ async def test_successful_service_requests_are_logged_at_debug_only(
         settings = Settings(
             _env_file=None,
             upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
             log_level=level,
         )
         app = create_app(settings, transport=httpx.MockTransport(upstream))
