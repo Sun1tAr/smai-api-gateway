@@ -6,9 +6,12 @@ services:
       target: test
     environment:
       GATEWAY_URL: http://gateway:8000
-      TEST_REDIS_URL: redis://redis:6379/0
+      # Отдельная БД: тесты чистят её (flushdb) и не трогают БД 0 gateway.
+      TEST_REDIS_URL: redis://redis:6379/1
     depends_on:
       gateway:
+        condition: service_healthy
+      user:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -79,6 +82,11 @@ services:
       context: .
       target: test
     command: ["uvicorn", "tests.stubs.user_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/openapi.json', timeout=2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
   recipes:
     build:
