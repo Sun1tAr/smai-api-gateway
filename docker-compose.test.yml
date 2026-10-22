@@ -19,39 +19,45 @@ services:
       UPSTREAM_DICTIONARY_URL: http://dictionary:8000
       UPSTREAM_USER_URL: http://user:8000
       # Одноразовый ключ только для этого тестового контейнера.
-      JWT_PRIVATE_KEY_FILE: /keys/jwt-private.pem
+      JWT_PRIVATE_KEY_FILE: /tmp/jwt-private.pem
       # Smoke-тесты шлют много запросов подряд и не проверяют лимит.
       RATE_LIMIT_ENABLED: "false"
-    volumes:
-      - jwt-keys:/keys:ro
-    depends_on:
-      recipes:
-        condition: service_healthy
-      jwt-keygen:
-        condition: service_completed_successfully
-
-  # Одноразово создаёт ключ подписи для тестового gateway; CMD образа не меняется.
-  jwt-keygen:
-    build:
-      context: .
-      target: production
-    user: "0"
-    volumes:
-      - jwt-keys:/keys
-    command:
-      - python
+    # Ключ создаётся при старте контейнера, потом запускается команда из `command`
+    # (держать в синхроне с CMD в Dockerfile; compose сбрасывает CMD образа при
+    # своём entrypoint). Отдельный one-shot сервис не годится: с
+    # --abort-on-container-exit compose после тестов зависает на остановке.
+    entrypoint:
+      - sh
       - -c
       - |
+        python - <<'PY'
         import os
         from cryptography.hazmat.primitives import serialization as s
         from cryptography.hazmat.primitives.asymmetric import ec
         key = ec.generate_private_key(ec.SECP256R1())
-        path = "/keys/jwt-private.pem"
         pem = key.private_bytes(s.Encoding.PEM, s.PrivateFormat.PKCS8, s.NoEncryption())
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        fd = os.open("/tmp/jwt-private.pem", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
         with os.fdopen(fd, "wb") as file:
             file.write(pem)
-        os.chown(path, 10001, 10001)
+        PY
+        exec "$@"
+      - --
+    command:
+      - uvicorn
+      - gateway.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+      - --no-access-log
+      - --no-server-header
+      - --no-proxy-headers
+    depends_on:
+      recipes:
+        condition: service_healthy
 
   recipes:
     build:
@@ -63,6 +69,3 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
-
-volumes:
-  jwt-keys:
