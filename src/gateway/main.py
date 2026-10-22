@@ -13,6 +13,7 @@ from starlette.types import ASGIApp
 from gateway import __version__
 from gateway.api import install_openapi, load_contracts, register_routes
 from gateway.asgi import RequestContextMiddleware, StripTraceContext
+from gateway.auth import AUTH_ROUTE
 from gateway.config import Settings
 from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
@@ -24,8 +25,9 @@ from gateway.observability import (
     redact_span,
 )
 from gateway.proxy import UpstreamClient
-from gateway.ratelimit import LIMITED_ENDPOINTS, RateLimiter
+from gateway.ratelimit import AUTH_LIMITED_ENDPOINTS, LIMITED_ENDPOINTS, RateLimiter
 from gateway.routing import load_routes
+from gateway.tokens import TokenIssuer
 
 logger = structlog.get_logger()
 
@@ -39,8 +41,16 @@ def create_app(
     configure_logging(settings.log_level)
     provider = create_tracer_provider(settings)
     upstreams = settings.upstream_urls()
-    routes = load_routes(settings.routes_file, upstreams)
-    contract = load_contracts(settings.contract_file, settings.contract_dictionary_file)
+    # Вход и регистрация описаны в коде, а не в routes.toml: ответ MS-3 не проксируется.
+    routes = (*load_routes(settings.routes_file, upstreams), AUTH_ROUTE)
+    contract = load_contracts(
+        settings.contract_file,
+        settings.contract_dictionary_file,
+        settings.contract_user_file,
+    )
+    token_issuer = TokenIssuer.from_file(
+        settings.jwt_private_key_file, settings.jwt_ttl_seconds
+    )
     registry = CollectorRegistry()
     client = UpstreamClient(
         settings, upstreams, transport=transport, metrics=UpstreamMetrics(registry)
@@ -83,6 +93,7 @@ def create_app(
     app.state.settings = settings
     app.state.tracer_provider = provider
     app.state.upstream_client = client
+    app.state.token_issuer = token_issuer
     limiter = (
         RateLimiter(
             requests=settings.rate_limit_requests,
@@ -98,13 +109,34 @@ def create_app(
         window_seconds=settings.rate_limit_window_seconds,
         max_keys=1,
     )
+    auth_limiter = (
+        RateLimiter(
+            requests=settings.auth_rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=settings.rate_limit_max_keys,
+        )
+        if settings.rate_limit_enabled and settings.auth_rate_limit_enabled
+        else None
+    )
+    app.state.auth_rate_limiter = auth_limiter
+    app.state.auth_global_limiter = (
+        RateLimiter(
+            requests=settings.auth_rate_limit_global_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=1,
+        )
+        if auth_limiter is not None
+        else None
+    )
     app.state.rate_limit_metrics = RateLimitMetrics(
         registry,
-        limited_routes=sorted({path for _, path in LIMITED_ENDPOINTS}),
-        tracked_keys=(
-            (lambda: app.state.rate_limiter.tracked_keys)
-            if limiter is not None
-            else None
+        limited_routes=sorted(
+            {path for _, path in LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS}
+        ),
+        tracked_keys=lambda: sum(
+            item.tracked_keys
+            for item in (app.state.rate_limiter, app.state.auth_rate_limiter)
+            if item is not None
         ),
     )
     register_error_handlers(app)

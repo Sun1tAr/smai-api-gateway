@@ -1,0 +1,778 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "smai-api-user через gateway (контракт API-8, API-9)",
+    "version": "v3",
+    "description": "Как регистрация и вход выглядят для клиента. Ключ пути — путь в сервисе MS-3; на gateway он начинается с `/auth`: `POST /auth/register`, `POST /auth/login`. MS-3 возвращает только `{userId}`, токен добавляет gateway (SMAI-100)."
+  },
+  "paths": {
+    "/register": {
+      "post": {
+        "summary": "Регистрация (API-8)",
+        "description": "Создаёт пользователя и сразу выдаёт токен: отдельный вход после регистрации не нужен. Логин приводится к нижнему регистру, поэтому `A@x.ru` и `a@x.ru` — один пользователь. Пароль хранится только в виде хэша argon2id. Пример `secret` из исходной спецификации не пройдёт проверку длины (минимум 12 символов).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "login",
+                  "password"
+                ],
+                "properties": {
+                  "login": {
+                    "type": "string",
+                    "format": "email",
+                    "maxLength": 254,
+                    "description": "Email, до 254 символов. Пробелы по краям обрезаются, регистр не важен: `A@x.ru` и `a@x.ru` — один логин."
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 12,
+                    "maxLength": 128,
+                    "description": "Пароль, 12–128 символов. Не должен содержать логин и входить в список частых паролей. Правил про заглавные буквы, цифры и символы нет. Не обрезается и не нормализуется."
+                  }
+                }
+              },
+              "example": {
+                "login": "user@example.com",
+                "password": "correct-horse-battery"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Пользователь создан.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "token"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Идентификатор пользователя."
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "JWT (ES256), подписан gateway. Claims: `sub` (userId строкой), `jti`, `iat`, `nbf`, `exp`, `iss` = `smai-gateway`. Срок жизни задаёт `JWT_TTL_SECONDS` (по умолчанию 24 часа), продлить токен нельзя: после `exp` нужен новый вход. Передаётся в заголовке `Authorization: Bearer <token>`."
+                    }
+                  }
+                },
+                "example": {
+                  "userId": 42,
+                  "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ik5RbDJ...Zk9xY.eyJpc3MiOiJzbWFpLWdhdGV3YXkiLCJzdWIiOiI0MiIsImp0aSI6IjNmMmI...In0.MEUCIQD...Q"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры: нет тела, невалидный JSON, не JSON `Content-Type`, поле не строка или отсутствует, логин не email или длиннее 254 символов, пароль вне допустимой длины.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "password_too_short": {
+                    "summary": "Слишком короткий пароль",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "password"
+                              ],
+                              "type": "string_too_short"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "missing_field": {
+                    "summary": "Нет поля",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "login"
+                              ],
+                              "type": "missing"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "password_too_common": {
+                    "summary": "Частый пароль",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "password"
+                              ],
+                              "type": "password_too_common"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "invalid_json": {
+                    "summary": "Невалидный JSON",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body"
+                              ],
+                              "type": "json_invalid"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Пользователь с таким логином уже существует (без учёта регистра).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "LOGIN_ALREADY_EXISTS",
+                    "message": "User with this login already exists",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Слишком много попыток входа или регистрации: по умолчанию не более 10 за минуту с одного адреса (`AUTH_RATE_LIMIT_REQUESTS`) и общий потолок 60 за минуту на всех (`AUTH_RATE_LIMIT_GLOBAL_REQUESTS`). Счётчик общий для `/auth/register` и `/auth/login` и отдельный от `POST /recipes/generate-menu`. Повторите запрос не раньше `Retry-After` секунд.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests, try again later",
+                    "details": {
+                      "retry_after_seconds": 30
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка сервера: сбой сервиса пользователей или gateway. Подробности не раскрываются.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Сервис пользователей занят (нет свободного слота хэширования, `details.reason = \"busy\"`) или у gateway исчерпан пул соединений (`details.reason = \"pool\"`). Повторите запрос через `Retry-After` секунд.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "busy": {
+                    "summary": "MS-3 занят",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Upstream service is busy, try again later",
+                        "details": {
+                          "upstream": "user",
+                          "reason": "busy"
+                        }
+                      }
+                    }
+                  },
+                  "pool": {
+                    "summary": "Пул gateway исчерпан",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Gateway is overloaded, try again later",
+                        "details": {
+                          "upstream": "user",
+                          "reason": "pool"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/login": {
+      "post": {
+        "summary": "Вход (API-9)",
+        "description": "Проверяет логин и пароль и выдаёт новый токен. Неизвестный логин и неверный пароль дают одинаковый ответ 401. Токен действует до `exp`; отзыва и продления нет.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "login",
+                  "password"
+                ],
+                "properties": {
+                  "login": {
+                    "type": "string",
+                    "format": "email",
+                    "maxLength": 254,
+                    "description": "Email, как при регистрации. Регистр не важен."
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "Пароль, 1–128 символов."
+                  }
+                }
+              },
+              "example": {
+                "login": "user@example.com",
+                "password": "correct-horse-battery"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Учётные данные верны.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "token"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Идентификатор пользователя."
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "JWT (ES256), подписан gateway. Claims: `sub` (userId строкой), `jti`, `iat`, `nbf`, `exp`, `iss` = `smai-gateway`. Срок жизни задаёт `JWT_TTL_SECONDS` (по умолчанию 24 часа), продлить токен нельзя: после `exp` нужен новый вход. Передаётся в заголовке `Authorization: Bearer <token>`."
+                    }
+                  }
+                },
+                "example": {
+                  "userId": 42,
+                  "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ik5RbDJ...Zk9xY.eyJpc3MiOiJzbWFpLWdhdGV3YXkiLCJzdWIiOiI0MiIsImp0aSI6IjNmMmI...In0.MEUCIQD...Q"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры: нет тела, невалидный JSON, не JSON `Content-Type`, поле не строка или отсутствует, логин не email или длиннее 254 символов, пароль вне допустимой длины.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "password_too_short": {
+                    "summary": "Слишком короткий пароль",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "password"
+                              ],
+                              "type": "string_too_short"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "missing_field": {
+                    "summary": "Нет поля",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "login"
+                              ],
+                              "type": "missing"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "invalid_json": {
+                    "summary": "Невалидный JSON",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body"
+                              ],
+                              "type": "json_invalid"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Неверный логин или пароль.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INVALID_CREDENTIALS",
+                    "message": "Invalid login or password",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Слишком много попыток входа или регистрации: по умолчанию не более 10 за минуту с одного адреса (`AUTH_RATE_LIMIT_REQUESTS`) и общий потолок 60 за минуту на всех (`AUTH_RATE_LIMIT_GLOBAL_REQUESTS`). Счётчик общий для `/auth/register` и `/auth/login` и отдельный от `POST /recipes/generate-menu`. Повторите запрос не раньше `Retry-After` секунд.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests, try again later",
+                    "details": {
+                      "retry_after_seconds": 30
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка сервера: сбой сервиса пользователей или gateway. Подробности не раскрываются.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Сервис пользователей занят (нет свободного слота хэширования, `details.reason = \"busy\"`) или у gateway исчерпан пул соединений (`details.reason = \"pool\"`). Повторите запрос через `Retry-After` секунд.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "busy": {
+                    "summary": "MS-3 занят",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Upstream service is busy, try again later",
+                        "details": {
+                          "upstream": "user",
+                          "reason": "busy"
+                        }
+                      }
+                    }
+                  },
+                  "pool": {
+                    "summary": "Пул gateway исчерпан",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Gateway is overloaded, try again later",
+                        "details": {
+                          "upstream": "user",
+                          "reason": "pool"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

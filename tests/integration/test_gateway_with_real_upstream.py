@@ -116,6 +116,8 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         assert (await gateway.get("/docs")).status_code == 200
         schema = (await gateway.get("/openapi.json")).json()
     assert set(schema["paths"]) == {
+        "/auth/login",
+        "/auth/register",
         "/dictionaries",
         "/health",
         "/metrics",
@@ -134,3 +136,34 @@ async def test_sequential_requests_reuse_the_connection(
     assert len(stub_requests) == 5
     # Один и тот же исходящий порт: соединение с MS-4 переиспользуется.
     assert len({request["client_port"] for request in stub_requests}) == 1
+
+
+async def test_register_then_login_through_the_gateway_against_a_real_user_service(
+    open_gateway, stub_url: str, user_stub_url: str, jwt_key_file
+) -> None:
+    import jwt
+
+    from gateway.tokens import load_private_key
+
+    credentials = {"login": "User@Example.com", "password": "correct-horse-battery"}
+    async with open_gateway(stub_url, upstream_user_url=user_stub_url) as gateway:
+        registered = await gateway.post("/auth/register", json=credentials)
+        duplicate = await gateway.post("/auth/register", json=credentials)
+        logged_in = await gateway.post("/auth/login", json=credentials)
+        wrong = await gateway.post(
+            "/auth/login", json={**credentials, "password": "wrong-password-1"}
+        )
+        invalid = await gateway.post("/auth/login", content=b"nope")
+    assert (registered.status_code, logged_in.status_code) == (201, 200)
+    assert (duplicate.status_code, wrong.status_code, invalid.status_code) == (
+        409,
+        401,
+        400,
+    )
+    public_key = load_private_key(jwt_key_file).public_key()
+    for response in (registered, logged_in):
+        body = response.json()
+        claims = jwt.decode(
+            body["token"], public_key, algorithms=["ES256"], issuer="smai-gateway"
+        )
+        assert body["userId"] == 1 and claims["sub"] == "1" and claims["jti"]

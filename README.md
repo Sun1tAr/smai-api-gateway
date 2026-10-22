@@ -2,8 +2,9 @@
 
 MS-1 — API Gateway SmartMeal: единая точка входа для клиента. Задача **SMAI-52**:
 инфраструктура и проксирование `/recipes/*` в MS-4 (`smai-api-receipes`).
-Бизнес-логики и БД у gateway нет. Аутентификации в v1 нет (гостевой режим, она
-запланирована на v3), как нет и ограничения частоты запросов: это отдельная задача.
+Бизнес-логики и БД у gateway нет. Исключение — вход и регистрация (SMAI-100, v3):
+gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутентификация»). Проверки токена на
+остальных маршрутах пока нет (SMAI-101).
 
 ## Эндпоинты
 
@@ -16,11 +17,13 @@ MS-1 — API Gateway SmartMeal: единая точка входа для кли
 | `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}` | API-1 (SMAI-A-121) |
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}` | API-2 (SMAI-A-127) |
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
+| `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |
+| `POST /auth/login` | `POST /login` (MS-3) | 200 `{"userId","token"}` | API-9 (SMAI-A-261) |
 | `GET /health` | — | 200 `{"status":"ok"}` | liveness gateway |
 | `GET /metrics` | — | 200, формат Prometheus | не пробрасывать наружу через NetBird |
 | `GET /docs`, `GET /openapi.json` | — | Swagger UI и схема | все эндпоинты с примерами и ошибками |
 
-Тела запросов и ответов gateway не разбирает и не меняет: статус, заголовки и тело
+Тела запросов и ответов gateway не разбирает и не меняет (кроме `/auth/*`): статус, заголовки и тело
 MS-4 (включая его ошибки) возвращаются как есть. Схемы в `/docs` описательные, они
 берутся из снимка контракта `contracts/receipes.openapi.json`; после готовности
 MS-4 снимок заменяется экспортом его OpenAPI.
@@ -36,9 +39,9 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
-| 429 | `RATE_LIMITED` | только `POST /recipes/generate-menu`: превышен лимит с одного адреса или общий потолок; заголовок `Retry-After`, `details.retry_after_seconds` |
+| 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок; заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
-| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`) |
+| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
 | 500 | `INTERNAL_ERROR` | непредвиденная ошибка gateway |
 
@@ -57,15 +60,21 @@ docker network create smai
 cp .env.example .env
 # Локально прокси нет: ключ лимита — адрес сокета. На stage/prod так не делать.
 echo 'RATE_LIMIT_KEY_BY_SOCKET=true' >> .env
-docker compose --profile stub up --build --wait   # gateway + заглушка MS-4
+# Ключ подписи JWT (путь задаёт JWT_PRIVATE_KEY_PATH в .env, файл не коммитится)
+openssl ecparam -name prime256v1 -genkey -noout -out jwt-private.pem
+chmod 0444 jwt-private.pem   # только для одиночной dev-машины; на stage/prod — 0400 и владелец UID 10001
+docker compose --profile stub up --build --wait   # gateway + заглушки MS-4 и MS-3
 curl --fail http://127.0.0.1:8080/health
 curl -i -X POST http://127.0.0.1:8080/recipes/generate-menu \
   -H 'content-type: application/json' -d '{"peopleCount":4,"weeklyBudget":5000}'
 curl --fail http://127.0.0.1:8080/metrics
+curl -i -X POST http://127.0.0.1:8080/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"login":"user@example.com","password":"correct-horse-battery"}'
 ```
 
 Без профиля `stub` запускается только gateway; MS-4 должен быть в сети `smai` под
-именем `recipes` и слушать порт 8000. Порты на хосте: gateway `GATEWAY_HTTP_PORT`
+именем `recipes`, MS-3 — под именем `user` (оба на порту 8000). Порты на хосте: gateway `GATEWAY_HTTP_PORT`
 (по умолчанию 8080), MS-4 — 8001, киоск — 8000. Контейнер работает от
 пользователя `gateway` (UID 10001) в одном процессе (`--workers 1`).
 
@@ -95,6 +104,14 @@ curl --fail http://127.0.0.1:8080/metrics
 | `ROUTES_FILE` | Файл маршрутов | `config/routes.toml` |
 | `CONTRACT_FILE` | Снимок контракта MS-4 для документации | `contracts/receipes.openapi.json` |
 | `CONTRACT_DICTIONARY_FILE` | Снимок контракта MS-2 для документации | `contracts/dictionary.openapi.json` |
+| `UPSTREAM_USER_URL` | Адрес MS-3 (пользователи) без пути, например `http://user:8000` | обязательна |
+| `JWT_PRIVATE_KEY_FILE` | Путь к PEM-файлу приватного ключа подписи JWT (EC P-256, без пароля) | обязательна |
+| `JWT_PRIVATE_KEY_PATH` | Только локальный Compose: путь на хосте к PEM-файлу ключа; Compose монтирует его секретом в `JWT_PRIVATE_KEY_FILE=/run/secrets/jwt_private_key` | обязательна в Compose |
+| `JWT_TTL_SECONDS` | Срок жизни токена, 60–2592000 | `86400` (24 часа) |
+| `CONTRACT_USER_FILE` | Снимок контракта API-8/API-9 для документации | `contracts/user.openapi.json` |
+| `AUTH_RATE_LIMIT_ENABLED` | Включает лимит на `/auth/*` (работает только при `RATE_LIMIT_ENABLED=true`) | `true` |
+| `AUTH_RATE_LIMIT_REQUESTS` | Сколько запросов `/auth/*` с одного адреса за окно (общий счётчик на оба маршрута) | `10` |
+| `AUTH_RATE_LIMIT_GLOBAL_REQUESTS` | Общий потолок `/auth/*` на всех клиентов за окно | `60` |
 | `LOG_LEVEL` | DEBUG / INFO / WARNING / ERROR | `INFO` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Базовый адрес OTLP HTTP, например `http://collector:4318` | экспорт отключён |
 | `GATEWAY_HTTP_PORT` | Порт на 127.0.0.1 в локальном Compose | `8080` |
@@ -104,6 +121,63 @@ curl --fail http://127.0.0.1:8080/metrics
 останавливает запуск. `.env` в образ не попадает, но локальный Compose передаёт его
 в контейнер целиком (`env_file`, файл необязателен); на stage/prod конфигурацию и
 секреты задаёт DevOps.
+
+## Аутентификация
+
+`POST /auth/register` (API-8) и `POST /auth/login` (API-9) — не побайтовый прокси,
+а явные обработчики (`src/gateway/auth.py`). Клиент отправляет `{"login","password"}`,
+gateway пересылает тело в MS-3 (`/register`, `/login`), получает `{"userId"}`,
+подписывает JWT и отвечает `{"userId","token"}` с кодом 201 (регистрация) или 200
+(вход) и `Cache-Control: no-store`. Пароль gateway не разбирает, не хранит и не
+пишет в логи и спаны; клиентский `X-User-Id` в MS-3 не передаётся. Токен выдаёт
+только gateway: MS-3 токен не знает (отклонение от текста API-8/API-9, где `token`
+указан и для сервиса).
+
+**Ответы MS-3** принимаются по белому списку: 400 (оба маршрута), 401 (только вход),
+409 (только регистрация) переотдаются с его `code`, `message` и `details`; 500
+превращается в собственный 500 `INTERNAL_ERROR` без подробностей MS-3; 503 с кодом
+`SERVICE_BUSY` — в 503 `EXTERNAL_SERVICE_ERROR` (`reason = "busy"`) с его
+`Retry-After`. Всё остальное — другой статус, 2xx без целого `userId > 0`, тело не в
+формате ошибки — это 502 `EXTERNAL_SERVICE_ERROR` (`reason = "protocol"`).
+
+**JWT.** Алгоритм `ES256` задан в коде, а не берётся из токена. При старте
+принимается только EC-ключ P-256 в PEM без пароля; RSA, другие кривые и
+зашифрованный PEM останавливают запуск с понятной ошибкой (содержимое файла не
+логируется). Заголовок: `alg=ES256`, `typ=JWT`, `kid` — отпечаток публичного ключа
+(RFC 7638, задел под ротацию в SMAI-101). Claims:
+
+| Claim | Значение |
+| --- | --- |
+| `iss` | `smai-gateway` |
+| `sub` | `userId` строкой |
+| `jti` | случайный UUID4, уникален для каждого токена |
+| `iat`, `nbf` | время выдачи, секунды |
+| `exp` | `iat + JWT_TTL_SECONDS` |
+
+Ключ создаётся и хранится так:
+
+```sh
+openssl ecparam -name prime256v1 -genkey -noout -out jwt-private.pem
+chmod 0400 jwt-private.pem && sudo chown 10001:10001 jwt-private.pem
+```
+
+**Права на Linux.** Compose монтирует секрет как bind mount и сохраняет владельца и
+права файла с хоста: с `0400` и владельцем не UID 10001 gateway не стартует
+(`JWT_PRIVATE_KEY_FILE cannot be read`). Связка `chown 10001:10001` + `chmod 0400` на
+Linux-хосте пока не проверена (на Docker Desktop for Mac права скрыты): проверить на
+стенде до выкатки. Файл монтируется в контейнер только на чтение (в Compose — секрет `jwt_private_key`,
+путь на хосте задаёт `JWT_PRIVATE_KEY_PATH`), принадлежит непривилегированному
+пользователю gateway (UID 10001), не кладётся в образ и не коммитится (`*.pem` в
+`.gitignore` и `.dockerignore`). Публичная часть для проверки токенов нужна
+сервисам-потребителям (SMAI-101).
+
+**Лимит.** `/auth/register` и `/auth/login` имеют отдельный лимит с теми же
+механизмом, окном и режимом ключа, что и `/recipes/generate-menu`, но своими
+счётчиками: не более `AUTH_RATE_LIMIT_REQUESTS` (10) запросов за окно с одного
+клиента на оба маршрута вместе и не более `AUTH_RATE_LIMIT_GLOBAL_REQUESTS` (60) от
+всех. Слот возвращается, если запрос не дошёл до проверки пароля (502 `connect`,
+503 `pool`, 503 `busy`, 413). `AUTH_RATE_LIMIT_ENABLED=false` отключает только его.
+Путь `auth` зарезервирован и не может быть префиксом в `config/routes.toml`.
 
 ## Как добавить путь или сервис
 

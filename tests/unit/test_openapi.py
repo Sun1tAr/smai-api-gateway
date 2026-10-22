@@ -52,7 +52,9 @@ def test_documented_paths_equal_the_allowlist(schema: dict) -> None:
         if path not in ("/health", "/metrics")
     }
     assert documented == {(path, method) for path, method, _ in OPERATIONS} | {
-        ("/dictionaries", "get")
+        ("/dictionaries", "get"),
+        ("/auth/register", "post"),
+        ("/auth/login", "post"),
     }
 
 

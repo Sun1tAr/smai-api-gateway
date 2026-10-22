@@ -101,6 +101,18 @@ class UpstreamTimeout(UpstreamFailure):
     reason = "timeout"
 
 
+class UpstreamBusy(UpstreamFailure):
+    """Сервис сам сообщил, что занят (MS-3: нет слота хэширования)."""
+
+    status_code = 503
+    message = "Upstream service is busy, try again later"
+    reason = "busy"
+
+    def __init__(self, upstream: str, retry_after_seconds: int) -> None:
+        super().__init__(upstream)
+        self.headers = {"Retry-After": str(retry_after_seconds)}
+
+
 class UpstreamOverloaded(UpstreamFailure):
     status_code = 503
     message = "Gateway is overloaded, try again later"

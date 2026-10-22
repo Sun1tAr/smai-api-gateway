@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -79,3 +81,49 @@ def test_upstream_url_lookup_by_name() -> None:
     )
     assert settings.upstream_url("recipes") == "http://recipes:8000"
     assert settings.upstream_url("unknown") is None
+
+
+def test_user_service_and_key_are_required(monkeypatch) -> None:
+    monkeypatch.delenv("UPSTREAM_USER_URL")
+    monkeypatch.delenv("JWT_PRIVATE_KEY_FILE")
+    with pytest.raises(ValidationError) as error:
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+        )
+    fields = {item["loc"][0] for item in error.value.errors()}
+    assert fields == {"upstream_user_url", "jwt_private_key_file"}
+
+
+def test_user_url_must_be_an_origin() -> None:
+    with pytest.raises(ValidationError) as error:
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+            upstream_user_url="http://user:8000/api",
+        )
+    assert "UPSTREAM_USER_URL" in str(error.value)
+
+
+@pytest.mark.parametrize("ttl", [59, 2_592_001, 0, -1])
+def test_jwt_ttl_is_bounded(ttl: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+            jwt_ttl_seconds=ttl,
+        )
+
+
+def test_jwt_defaults() -> None:
+    settings = Settings(
+        _env_file=None,
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+    )
+    assert settings.jwt_ttl_seconds == 86_400
+    assert settings.contract_user_file == Path("contracts/user.openapi.json")
+    assert "user" in settings.upstream_urls()

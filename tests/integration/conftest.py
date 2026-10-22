@@ -10,6 +10,7 @@ import uvicorn
 from gateway.config import Settings
 from gateway.main import create_app
 from tests.stubs.recipes_stub import app as stub_app
+from tests.stubs.user_stub import app as user_stub_app
 
 
 def free_port() -> int:
@@ -26,6 +27,30 @@ async def stub_url() -> AsyncIterator[str]:
     server = uvicorn.Server(
         uvicorn.Config(
             stub_app,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            timeout_graceful_shutdown=1,
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.01)
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        await task
+
+
+@pytest.fixture
+async def user_stub_url() -> AsyncIterator[str]:
+    """Заглушка MS-3 под настоящим uvicorn."""
+    user_stub_app.state.users.clear()
+    port = free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(
+            user_stub_app,
             host="127.0.0.1",
             port=port,
             log_level="warning",
