@@ -15,10 +15,12 @@ dependencies = [
     "pydantic-settings>=2.6,<3",
     "structlog>=25,<27",
     "uvicorn>=0.34,<1",
+    "redis>=5,<8",
 ]
 
 [dependency-groups]
 dev = [
+    "fakeredis>=2.26,<3",
     "jsonschema>=4,<5",
     "pytest>=8,<10",
     "pytest-asyncio>=1,<2",

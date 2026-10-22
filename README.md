@@ -3,8 +3,9 @@
 MS-1 — API Gateway SmartMeal: единая точка входа для клиента. Задача **SMAI-52**:
 инфраструктура и проксирование `/recipes/*` в MS-4 (`smai-api-receipes`).
 Бизнес-логики и БД у gateway нет. Исключение — вход и регистрация (SMAI-100, v3):
-gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутентификация»). Проверки токена на
-остальных маршрутах пока нет (SMAI-101).
+gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутентификация»). С SMAI-101 gateway
+проверяет токены защищённых маршрутов (`POST /auth/logout`, `GET /user/profile`) и
+хранит отозванные в Redis; своей БД у gateway по-прежнему нет.
 
 ## Эндпоинты
 
@@ -19,11 +20,13 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |
 | `POST /auth/login` | `POST /login` (MS-3) | 200 `{"userId","token"}` | API-9 (SMAI-A-261) |
+| `POST /auth/logout` | — (только gateway, Redis) | 200 `{"success": true}` | API-10 (SMAI-A-263) |
+| `GET /user/profile` | `GET /profile` (MS-3) | 200 `{"userId","login","createdAt"}` | API-11 (SMAI-A-270) |
 | `GET /health` | — | 200 `{"status":"ok"}` | liveness gateway |
 | `GET /metrics` | — | 200, формат Prometheus | не пробрасывать наружу через NetBird |
 | `GET /docs`, `GET /openapi.json` | — | Swagger UI и схема | все эндпоинты с примерами и ошибками |
 
-Тела запросов и ответов gateway не разбирает и не меняет (кроме `/auth/*`): статус, заголовки и тело
+Тела запросов и ответов gateway не разбирает и не меняет (кроме `/auth/*` и `/user/profile`): статус, заголовки и тело
 MS-4 (включая его ошибки) возвращаются как есть. Схемы в `/docs` описательные, они
 берутся из снимка контракта `contracts/receipes.openapi.json`; после готовности
 MS-4 снимок заменяется экспортом его OpenAPI.
@@ -36,12 +39,13 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | HTTP | `error.code` | Когда |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | небезопасный путь (`..`, `%2f`, `%00` и т. п.) или query |
+| 401 | `UNAUTHORIZED` | `POST /auth/logout`, `GET /user/profile`: токен отсутствует, недействителен (подпись, срок, формат), отозван или выдан удалённому пользователю; причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
 | 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок; заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
-| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`) |
+| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout` и `/user/profile` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
 | 500 | `INTERNAL_ERROR` | непредвиденная ошибка gateway |
 
@@ -68,10 +72,15 @@ curl --fail http://127.0.0.1:8080/health
 curl -i -X POST http://127.0.0.1:8080/recipes/generate-menu \
   -H 'content-type: application/json' -d '{"peopleCount":4,"weeklyBudget":5000}'
 curl --fail http://127.0.0.1:8080/metrics
-curl -i -X POST http://127.0.0.1:8080/auth/register \
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/auth/register \
   -H 'content-type: application/json' \
-  -d '{"login":"user@example.com","password":"correct-horse-battery"}'
+  -d '{"login":"user@example.com","password":"correct-horse-battery"}' | jq -r .token)
+curl -i http://127.0.0.1:8080/user/profile -H "Authorization: Bearer $TOKEN"
+curl -i -X POST http://127.0.0.1:8080/auth/logout -H "Authorization: Bearer $TOKEN"
+curl -i http://127.0.0.1:8080/user/profile -H "Authorization: Bearer $TOKEN"   # 401
 ```
+
+Compose поднимает и локальный Redis (сервис `redis`, только в сети `smai`).
 
 Без профиля `stub` запускается только gateway; MS-4 должен быть в сети `smai` под
 именем `recipes`, MS-3 — под именем `user` (оба на порту 8000). Порты на хосте: gateway `GATEWAY_HTTP_PORT`
@@ -112,6 +121,9 @@ curl -i -X POST http://127.0.0.1:8080/auth/register \
 | `AUTH_RATE_LIMIT_ENABLED` | Включает лимит на `/auth/*` (работает только при `RATE_LIMIT_ENABLED=true`) | `true` |
 | `AUTH_RATE_LIMIT_REQUESTS` | Сколько запросов `/auth/*` с одного адреса за окно (общий счётчик на оба маршрута) | `10` |
 | `AUTH_RATE_LIMIT_GLOBAL_REQUESTS` | Общий потолок `/auth/*` на всех клиентов за окно | `60` |
+| `REDIS_URL` | Redis с отозванными токенами: `redis://[:password@]host:port/db` или `rediss://`; пароль только через URL из секрета, значение не логируется | обязательна |
+| `REDIS_CONNECT_TIMEOUT_SECONDS` | Установка соединения с Redis (0–30) | `1` |
+| `REDIS_OPERATION_TIMEOUT_SECONDS` | Ожидание ответа Redis на команду (0–30) | `1` |
 | `LOG_LEVEL` | DEBUG / INFO / WARNING / ERROR | `INFO` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Базовый адрес OTLP HTTP, например `http://collector:4318` | экспорт отключён |
 | `GATEWAY_HTTP_PORT` | Порт на 127.0.0.1 в локальном Compose | `8080` |
@@ -144,7 +156,7 @@ gateway пересылает тело в MS-3 (`/register`, `/login`), полу�
 принимается только EC-ключ P-256 в PEM без пароля; RSA, другие кривые и
 зашифрованный PEM останавливают запуск с понятной ошибкой (содержимое файла не
 логируется). Заголовок: `alg=ES256`, `typ=JWT`, `kid` — отпечаток публичного ключа
-(RFC 7638, задел под ротацию в SMAI-101). Claims:
+(RFC 7638, задел под ротацию ключей). Claims:
 
 | Claim | Значение |
 | --- | --- |
@@ -168,8 +180,8 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 стенде до выкатки. Файл монтируется в контейнер только на чтение (в Compose — секрет `jwt_private_key`,
 путь на хосте задаёт `JWT_PRIVATE_KEY_PATH`), принадлежит непривилегированному
 пользователю gateway (UID 10001), не кладётся в образ и не коммитится (`*.pem` в
-`.gitignore` и `.dockerignore`). Публичная часть для проверки токенов нужна
-сервисам-потребителям (SMAI-101).
+`.gitignore` и `.dockerignore`). Токены проверяет сам gateway по
+публичной части этого же ключа; другим сервисам токен не передаётся.
 
 **Лимит.** `/auth/register` и `/auth/login` имеют отдельный лимит с теми же
 механизмом, окном и режимом ключа, что и `/recipes/generate-menu`, но своими
@@ -178,6 +190,61 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 всех. Слот возвращается, если запрос не дошёл до проверки пароля (502 `connect`,
 503 `pool`, 503 `busy`, 413). `AUTH_RATE_LIMIT_ENABLED=false` отключает только его.
 Путь `auth` зарезервирован и не может быть префиксом в `config/routes.toml`.
+
+### Проверка токена, выход и профиль (SMAI-101)
+
+**Защищённые маршруты** — `POST /auth/logout` и `GET /user/profile`; в коде их
+перечисляет `PROTECTED_ENDPOINTS` (`src/gateway/api.py`). Если у такого маршрута нет
+зависимости проверки токена или он не зарегистрирован, gateway не стартует. Остальные
+маршруты (в том числе `POST /recipes/generate-menu`) работают без токена.
+
+**Как проверяется токен.** Заголовок `Authorization: Bearer <jwt>`: схема без учёта
+регистра, один заголовок, один токен, до 4096 символов. Затем подпись `ES256` по
+публичному ключу gateway (алгоритм задан в коде: `alg=none`, HS256 и другие
+отклоняются), `kid` текущего ключа, `iss=smai-gateway`, наличие `exp`, `iat`, `nbf`,
+`jti`, `sub` без запаса по времени, `sub` — целое > 0, `jti` — UUID. Любая ошибка даёт
+одинаковый 401 `UNAUTHORIZED`; причина (`missing`, `malformed`, `algorithm`, `kid`,
+`signature`, `expired`, `not_yet_valid`, `claims`, `revoked`) видна только в логе и в
+метрике `gateway_token_rejected_total{reason}`, сам токен нигде не пишется. Потом
+проверяется список отозванных в Redis. Идентификатор пользователя берётся из `sub`;
+клиентский `X-User-Id` (любой регистр, дубли) срезается, а `Authorization` в сервисы
+не пересылается ни на каких маршрутах: MS-3 получает только `X-User-Id` из токена.
+
+**`POST /auth/logout`.** Тело не нужно. Пишет в Redis ключ `revoked:{jti}` со
+значением `1` и сроком жизни `exp − сейчас` (минимум 1 секунда), так что запись
+исчезает вместе с токеном. Ответ 200 `{"success": true}`. Дальше этот токен получает
+401 на любом защищённом маршруте, повторный logout тоже 401; другие токены
+пользователя действуют. Если запись не удалась, ответ 503 и токен остаётся
+действующим: logout можно повторить.
+
+**`GET /user/profile`.** Берёт пользователя из токена и вызывает MS-3
+`GET /profile` с `X-User-Id`. Ответ MS-3 проверяется по белому списку: 200 с телом
+`{userId, login, createdAt}`, где `userId` совпадает с `sub`; 404 `USER_NOT_FOUND`
+(токен выдан удалённому пользователю) превращается в 401; 500 в 500 без подробностей;
+503 `SERVICE_BUSY` в 503 с `Retry-After`; остальное, в том числе 401 от MS-3, в 502
+`EXTERNAL_SERVICE_ERROR`. Лишние поля ответа MS-3 клиенту не отдаются.
+
+**Redis недоступен.** Токен без проверки на отзыв не принимается, поэтому
+`POST /auth/logout` и `GET /user/profile` отвечают 503 `EXTERNAL_SERVICE_ERROR`
+(`details.upstream = "redis"`, `reason`: `connect`, `timeout` или `protocol`). Это 503,
+а не 401: пользователя не нужно «разлогинивать» из-за сбоя, запрос можно повторить.
+Гостевые маршруты (`POST /recipes/generate-menu`, `GET /dictionaries`) работают;
+gateway стартует и при мёртвом Redis, соединение открывается при первой проверке.
+`/health` Redis не проверяет, иначе его падение остановило бы и гостевые маршруты у
+оркестратора. Ретраев нет, таймауты `REDIS_*_TIMEOUT_SECONDS` по секунде.
+
+**Требования к Redis (DevOps).** Доступен только из сети `smai`, наружу не
+публиковать; пароль через `REDIS_URL` из секрета. Нужно сохранение на диск
+(`appendonly yes`, `appendfsync everysec`) и `maxmemory-policy noeviction`: после
+рестарта без сохранения или при вытеснении ключей отозванные токены снова станут
+действующими до своего `exp`. Данных мало: только `jti` отозванных токенов не дольше
+`JWT_TTL_SECONDS`. Выкатка: Redis, затем MS-3, затем gateway. Состояние видно в
+метриках: `gateway_redis_up` (появляется после первого обращения), `gateway_revocation_checks_total{result}`,
+`gateway_revocation_writes_total{result}`.
+
+Лимит запросов на эти два маршрута не вводится: проверка подписи дешёвая, а
+защищаемых ресурсов за ними нет. Префиксы `auth` и `user` зарезервированы и не могут
+быть префиксом в `config/routes.toml`.
 
 ## Как добавить путь или сервис
 
@@ -327,9 +394,12 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
   `gateway_upstream_requests_total{upstream,route,method,status}`,
   `gateway_upstream_request_duration_seconds{upstream,route}`,
   `gateway_upstream_errors_total{upstream,reason}`, `gateway_upstream_up{upstream}`
-  (0 только после `connect`/`timeout`). Эндпоинт описан в `/docs` с тегом `service`.
-- Трейсы: `/health` и `/metrics` не трассируются; query, `User-Agent` и адрес клиента
-  в атрибуты спанов не попадают. Каждый запрос начинает новый трейс gateway (клиентский `traceparent`
+  (0 только после `connect`/`timeout`), `gateway_token_rejected_total{reason}`,
+  `gateway_revocation_checks_total{result}`, `gateway_revocation_writes_total{result}`,
+  `gateway_redis_up` (1 после успешной команды, 0 после ошибки соединения или
+  таймаута; до первого обращения к Redis серии нет). Эндпоинт описан в `/docs` с тегом `service`.
+- Трейсы: `/health` и `/metrics` не трассируются; query, `User-Agent`, адрес клиента и заголовки
+  `Authorization`/`Cookie`/`X-User-Id` в атрибуты спанов не попадают. Каждый запрос начинает новый трейс gateway (клиентский `traceparent`
   не доверяется) и передаёт `traceparent` в MS-4.
 
 ## Разработка и тесты

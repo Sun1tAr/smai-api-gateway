@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "smai-api-user через gateway (контракт API-8, API-9)",
+    "title": "smai-api-user через gateway (контракт API-8, API-9, API-11)",
     "version": "v3",
-    "description": "Как регистрация и вход выглядят для клиента. Ключ пути — путь в сервисе MS-3; на gateway он начинается с `/auth`: `POST /auth/register`, `POST /auth/login`. MS-3 возвращает только `{userId}`, токен добавляет gateway (SMAI-100)."
+    "description": "Как регистрация и вход выглядят для клиента. Ключ пути — путь в сервисе MS-3; на gateway он начинается с `/auth`: `POST /auth/register`, `POST /auth/login`. MS-3 возвращает только `{userId}`, токен добавляет gateway (SMAI-100). Профиль: `GET /user/profile` (MS-3 `GET /profile`, SMAI-101); `X-User-Id` в MS-3 gateway берёт из токена."
   },
   "paths": {
     "/register": {
@@ -767,6 +767,135 @@
                 "schema": {
                   "type": "integer",
                   "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profile": {
+      "get": {
+        "summary": "Профиль пользователя (API-11)",
+        "description": "Возвращает профиль владельца токена. Заголовок `Authorization: Bearer <jwt>` обязателен; пользователь определяется по токену, параметров нет. Клиентский `X-User-Id` игнорируется: в сервис пользователей идёт только идентификатор из токена. Ответ не кэшируется (`Cache-Control: no-store`).",
+        "responses": {
+          "200": {
+            "description": "Профиль найден.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "login",
+                    "createdAt"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Идентификатор пользователя."
+                    },
+                    "login": {
+                      "type": "string",
+                      "format": "email",
+                      "description": "Логин (email) в нижнем регистре."
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Время регистрации в UTC, ISO 8601 с `Z`."
+                    }
+                  }
+                },
+                "example": {
+                  "userId": 42,
+                  "login": "user@example.com",
+                  "createdAt": "2026-10-14T12:00:00Z"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат), отозван через `POST /auth/logout`, либо выдан пользователю, которого уже нет. Причина в ответе не раскрывается. В ответе `WWW-Authenticate: Bearer`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка сервера: сбой сервиса пользователей или gateway. Подробности не раскрываются.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
                 }
               }
             }

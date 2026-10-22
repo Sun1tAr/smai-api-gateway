@@ -79,7 +79,21 @@ def create_tracer_provider(settings: Settings) -> TracerProvider:
 _DROPPED_SPAN_ATTRIBUTES = frozenset(
     {"http.user_agent", "user_agent.original", "net.peer.ip", "client.address"}
 )
+# Заголовки запроса попадают в спан, если оператор включил их захват в OTel; токен и
+# идентичность среди них не должны уходить в коллектор ни при какой настройке.
+_SENSITIVE_HEADER_PREFIX = "http.request.header."
+_SENSITIVE_HEADERS = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "x-user-id"}
+)
 _URL_SPAN_ATTRIBUTES = ("http.url", "url.full", "http.target", "url.query")
+
+
+def _is_sensitive_header(key: str) -> bool:
+    lowered = key.lower()
+    return lowered.startswith(_SENSITIVE_HEADER_PREFIX) and (
+        lowered.removeprefix(_SENSITIVE_HEADER_PREFIX).replace("_", "-")
+        in _SENSITIVE_HEADERS
+    )
 
 
 # В коллектор не уходят query, User-Agent и адрес клиента: логи их тоже не пишут.
@@ -89,7 +103,11 @@ def redact_span(span: Any, *_: Any) -> None:
     if attributes is None:
         return
     for key in list(attributes):
-        if key in _DROPPED_SPAN_ATTRIBUTES or key == "url.query":
+        if (
+            key in _DROPPED_SPAN_ATTRIBUTES
+            or key == "url.query"
+            or _is_sensitive_header(key)
+        ):
             del attributes[key]
         elif key in _URL_SPAN_ATTRIBUTES:
             attributes[key] = str(attributes[key]).split("?", 1)[0]

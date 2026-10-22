@@ -8,19 +8,24 @@ from typing import Any
 import structlog
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
+from fastapi.routing import APIRoute
 
 from gateway.auth import AUTH_ROUTE, authenticate
+from gateway.bearer import require_user
 from gateway.errors import (
     ErrorResponse,
     InvalidRequestPath,
     PayloadTooLarge,
     RateLimited,
+    RedisUnavailable,
     UpstreamBusy,
     UpstreamOverloaded,
     UpstreamUnavailable,
 )
 from gateway.health import metrics_path_item
+from gateway.logout import LOGOUT_KEY
 from gateway.policy import client_response_headers, upstream_request_headers
+from gateway.profile import PROFILE_ENDPOINT, fetch_profile
 from gateway.proxy import UpstreamClient, read_limited_body
 from gateway.ratelimit import (
     AUTH_LIMITED_ENDPOINTS,
@@ -45,6 +50,11 @@ _NOT_REACHED = (
     UpstreamBusy,
 )
 _PARAM = re.compile(r"\{[a-z][a-z0-9_]*\}")
+# Маршруты с обязательным токеном. Новый защищённый маршрут (SMAI-102: API-13)
+# добавляется сюда: сервис не стартует, если у него нет зависимости проверки.
+PROTECTED_ENDPOINTS = frozenset({LOGOUT_KEY, ("GET", PROFILE_ENDPOINT.gateway_path)})
+# Путь в сервис задан кодом, а не запросом клиента: 400 за небезопасный путь невозможен.
+_FIXED_PATH = (*AUTH_ROUTE.endpoints, PROFILE_ENDPOINT)
 
 
 class ContractError(ValueError):
@@ -168,6 +178,40 @@ def _gateway_response(status: int, upstream: str, limit: int) -> dict[str, Any]:
     }
 
 
+# У защищённого маршрута 503 бывает ещё и из-за Redis: два примера рядом.
+def _protected_503(endpoint: Endpoint, limit: int) -> dict[str, Any]:
+    pool = _gateway_response(503, endpoint.upstream, limit)
+    redis = {
+        "error": {
+            "code": "EXTERNAL_SERVICE_ERROR",
+            "message": RedisUnavailable.message,
+            "details": {"upstream": "redis", "reason": "connect"},
+        }
+    }
+    return {
+        **pool,
+        "description": (
+            "Токен нельзя проверить или gateway перегружен. Redis с отозванными "
+            "токенами недоступен (`details.upstream` = `redis`, `reason`: "
+            "`connect`, `timeout`, `protocol`): токен без проверки не "
+            "принимается, запрос можно повторить. Либо исчерпан пул соединений "
+            "к сервису (`reason` = `pool`). Ответ 503 самого сервиса приходит с "
+            "`Retry-After`, `reason` = `busy`."
+        ),
+        "content": {
+            "application/json": {
+                "examples": {
+                    "redis": {"summary": "Redis недоступен", "value": redis},
+                    "pool": {
+                        "summary": "Пул соединений исчерпан",
+                        "value": _gateway_example(503, endpoint.upstream, limit),
+                    },
+                }
+            }
+        },
+    }
+
+
 def _contract_response(where: str, status: str, response: Any) -> dict[str, Any]:
     if not isinstance(response, dict) or "description" not in response:
         raise ContractError(f"{where}: response {status} has no description")
@@ -192,16 +236,19 @@ def _operation_docs(
     for status in sorted(_GATEWAY_ERRORS):
         if status == 413 and endpoint.method not in _BODY_METHODS:
             continue
+        if status == 400 and endpoint in _FIXED_PATH:
+            continue
         if status == 429 and (endpoint.method, endpoint.gateway_path) not in (
             LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS
         ):
             continue
         responses[status] = _gateway_response(status, endpoint.upstream, limit)
+    if (endpoint.method, endpoint.gateway_path) in PROTECTED_ENDPOINTS:
+        responses[503] = _protected_503(endpoint, limit)
     # Ответы MS-4 описывают его собственные ошибки и перекрывают общие.
     for status, response in operation["responses"].items():
         response = dict(_contract_response(where, status, response))
-        # /auth/* не разбирает путь, поэтому 400 за небезопасный путь там невозможен.
-        if status == "400" and endpoint not in AUTH_ROUTE.endpoints:
+        if status == "400" and endpoint not in _FIXED_PATH:
             response["description"] += " " + _GATEWAY_ERRORS[400][0]
         responses[status] = response
     extra: dict[str, Any] = {}
@@ -309,6 +356,12 @@ async def edge_guard(request: Request) -> None:
     raise RateLimited(admission.retry_after)
 
 
+# Токен проверяется раньше лимитера: подпись дешёвая, а лимит на неё не нужен.
+def _dependencies(endpoint: Endpoint) -> list[Any]:
+    protected = (endpoint.method, endpoint.gateway_path) in PROTECTED_ENDPOINTS
+    return [*([Depends(require_user)] if protected else []), Depends(edge_guard)]
+
+
 def _register(
     app: FastAPI, endpoint: Endpoint, docs: dict[str, Any], limit: int
 ) -> None:
@@ -324,6 +377,10 @@ def _register(
         if endpoint in AUTH_ROUTE.endpoints:
             return await authenticate(
                 request, endpoint, limit, request_client(request).ip
+            )
+        if endpoint == PROFILE_ENDPOINT:
+            return await fetch_profile(
+                request, request.state.user, request_client(request).ip
             )
         client: UpstreamClient = request.app.state.upstream_client
         raw_path = request.scope.get("raw_path") or request.scope["path"].encode()
@@ -367,7 +424,7 @@ def _register(
         operation_id=f"{endpoint.method.lower()}_{slug}",
         tags=[endpoint.prefix or endpoint.upstream],
         response_class=Response,
-        dependencies=[Depends(edge_guard)],
+        dependencies=_dependencies(endpoint),
         **docs,
     )
 
@@ -384,6 +441,27 @@ def register_routes(
     missing = (LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS) - registered
     if missing:
         raise ContractError(f"rate limited endpoints are not routed: {sorted(missing)}")
+
+
+def check_protected_routes(app: FastAPI) -> None:
+    """Защищённый маршрут без проверки токена или без регистрации не стартует."""
+    checked: set[tuple[str, str]] = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        guarded = any(
+            getattr(dep.call, "token_required", False) is True
+            for dep in route.dependant.dependencies
+        )
+        for method in route.methods:
+            key = (method, route.path)
+            if key in PROTECTED_ENDPOINTS:
+                if not guarded:
+                    raise ContractError(f"{key} has no token check")
+                checked.add(key)
+    missing = PROTECTED_ENDPOINTS - checked
+    if missing:
+        raise ContractError(f"protected endpoints are not routed: {sorted(missing)}")
 
 
 # 400 из контракта (валидация MS-4) и 400 самого gateway живут рядом как два примера.
@@ -422,7 +500,7 @@ def install_openapi(
                     ]
                     for status, response in source["responses"].items():
                         content = copy.deepcopy(response["content"])
-                        if status == "400" and endpoint not in AUTH_ROUTE.endpoints:
+                        if status == "400" and endpoint not in _FIXED_PATH:
                             content = _merge_400(content, endpoint.upstream)
                         target["responses"][status]["content"] = content
                     if "requestBody" in source:

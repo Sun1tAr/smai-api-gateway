@@ -55,6 +55,8 @@ def test_documented_paths_equal_the_allowlist(schema: dict) -> None:
         ("/dictionaries", "get"),
         ("/auth/register", "post"),
         ("/auth/login", "post"),
+        ("/auth/logout", "post"),
+        ("/user/profile", "get"),
     }
 
 

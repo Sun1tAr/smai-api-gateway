@@ -27,6 +27,8 @@ EDGE_STRIP = frozenset(
         b"traceparent",
         b"tracestate",
         b"baggage",
+        # Токен проверяет gateway; сервисы получают только X-User-Id.
+        b"authorization",
     }
 )
 EDGE_STRIP_PREFIXES = (b"x-forwarded-", b"x-user-", b"x-auth-")
@@ -61,6 +63,7 @@ def upstream_request_headers(
     request_id: str,
     client_ip: str | None,
     scheme: str,
+    user_id: int | None = None,
 ) -> Headers:
     kept = [
         (name, value)
@@ -72,6 +75,9 @@ def upstream_request_headers(
     kept.append((b"x-forwarded-proto", scheme.encode("ascii")))
     if client_ip is not None:
         kept.append((b"x-forwarded-for", client_ip.encode("ascii")))
+    # Единственный источник: проверенный токен. Клиентский X-User-Id срезан выше.
+    if user_id is not None:
+        kept.append((b"x-user-id", str(user_id).encode("ascii")))
     return kept
 
 
