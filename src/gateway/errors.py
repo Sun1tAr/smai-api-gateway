@@ -68,6 +68,15 @@ class RateLimited(GatewayError):
         self.headers = {"Retry-After": str(retry_after_seconds)}
 
 
+class Unauthorized(GatewayError):
+    """Токен отсутствует или недействителен; причина клиенту не раскрывается."""
+
+    status_code = 401
+    code = "UNAUTHORIZED"
+    message = "Authentication token is missing or invalid"
+    headers = {"WWW-Authenticate": "Bearer"}
+
+
 class UpstreamFailure(GatewayError):
     code = "EXTERNAL_SERVICE_ERROR"
     reason = "unknown"
@@ -111,6 +120,17 @@ class UpstreamBusy(UpstreamFailure):
     def __init__(self, upstream: str, retry_after_seconds: int) -> None:
         super().__init__(upstream)
         self.headers = {"Retry-After": str(retry_after_seconds)}
+
+
+class RedisUnavailable(UpstreamFailure):
+    """Хранилище отзыва токенов недоступно: токен без проверки не пропускаем."""
+
+    status_code = 503
+    message = "Token store is unavailable, try again later"
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__("redis")
 
 
 class UpstreamOverloaded(UpstreamFailure):

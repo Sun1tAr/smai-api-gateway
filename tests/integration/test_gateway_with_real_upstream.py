@@ -117,12 +117,14 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         schema = (await gateway.get("/openapi.json")).json()
     assert set(schema["paths"]) == {
         "/auth/login",
+        "/auth/logout",
         "/auth/register",
         "/dictionaries",
         "/health",
         "/metrics",
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
+        "/user/profile",
     }
 
 

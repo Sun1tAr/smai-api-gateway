@@ -13,6 +13,8 @@ services:
       UPSTREAM_RECIPES_URL: ${UPSTREAM_RECIPES_URL:?Set UPSTREAM_RECIPES_URL}
       UPSTREAM_DICTIONARY_URL: ${UPSTREAM_DICTIONARY_URL:?Set UPSTREAM_DICTIONARY_URL}
       UPSTREAM_USER_URL: ${UPSTREAM_USER_URL:?Set UPSTREAM_USER_URL}
+      # Список отозванных токенов; пароль, если он есть, только внутри URL.
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
       # Приватный ключ подписи JWT монтируется файлом (секрет Compose), только на чтение.
       JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -21,6 +23,28 @@ services:
       - jwt_private_key
     ports:
       - "127.0.0.1:${GATEWAY_HTTP_PORT:-8080}:8000"
+    networks:
+      - smai
+
+  # Локальный Redis для отозванных токенов. В контуре Redis ведёт DevOps: только сеть
+  # smai, appendonly yes, appendfsync everysec, noeviction (иначе отзыв токена пропадёт).
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - smai
 
@@ -52,6 +76,9 @@ services:
       smai:
         aliases:
           - user
+
+volumes:
+  redis-data:
 
 # PEM-файл ключа ES256 (P-256) без пароля: путь на хосте задаёт JWT_PRIVATE_KEY_PATH.
 # Файл не коммитить и не класть в образ; владелец UID 10001, права 0400.

@@ -5,11 +5,14 @@
 """
 
 import json
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request, Response
 
 app = FastAPI(title="user-stub", redirect_slashes=False)
 app.state.users = {}
+# Заголовки последнего запроса профиля: тесты проверяют, что токен до MS-3 не дошёл.
+app.state.profile_headers = []
 
 
 def error(status: int, code: str, message: str) -> Response:
@@ -55,3 +58,20 @@ async def login(request: Request) -> Response:
     return Response(
         json.dumps({"userId": user[0]}), status_code=200, media_type="application/json"
     )
+
+
+@app.get("/profile")
+async def profile(request: Request) -> Response:
+    app.state.profile_headers.append(dict(request.headers))
+    raw = request.headers.get("x-user-id", "")
+    for login, (user_id, _) in app.state.users.items():
+        if raw == str(user_id):
+            body = {
+                "userId": user_id,
+                "login": login,
+                "createdAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            return Response(json.dumps(body), media_type="application/json")
+    if not raw.isdigit():
+        return error(401, "UNAUTHORIZED", "User is not identified")
+    return error(404, "USER_NOT_FOUND", "User not found")

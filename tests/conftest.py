@@ -5,6 +5,7 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from fakeredis import FakeAsyncRedis
 
 from gateway.config import Settings
 from gateway.main import create_app
@@ -40,6 +41,16 @@ def jwt_key_file(tmp_path_factory: pytest.TempPathFactory):
 def _auth_environment(monkeypatch: pytest.MonkeyPatch, jwt_key_file) -> None:
     monkeypatch.setenv("UPSTREAM_USER_URL", "http://user:8000")
     monkeypatch.setenv("JWT_PRIVATE_KEY_FILE", str(jwt_key_file))
+    # Адрес не открывается: соединение ленивое, а тесты защищённых маршрутов
+    # подставляют fakeredis через create_app(redis_client=...).
+    monkeypatch.setenv("REDIS_URL", "redis://redis:6379/0")
+
+
+@pytest.fixture
+async def fake_redis() -> AsyncIterator[FakeAsyncRedis]:
+    client = FakeAsyncRedis()
+    yield client
+    await client.aclose()
 
 
 @pytest.fixture
@@ -103,9 +114,11 @@ def upstream() -> Recorder:
 
 @pytest.fixture
 async def gateway(
-    settings: Settings, upstream: Recorder
+    settings: Settings, upstream: Recorder, fake_redis: FakeAsyncRedis
 ) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(settings, transport=httpx.MockTransport(upstream))
+    app = create_app(
+        settings, transport=httpx.MockTransport(upstream), redis_client=fake_redis
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://gateway"
     ) as client:

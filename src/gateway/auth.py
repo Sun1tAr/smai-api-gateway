@@ -49,7 +49,7 @@ class UserServiceError(GatewayError):
         self.message = message
 
 
-def _error_body(body: bytes) -> dict[str, Any] | None:
+def error_body(body: bytes) -> dict[str, Any] | None:
     try:
         error = json.loads(body)["error"]
         code, message = error["code"], error["message"]
@@ -78,7 +78,7 @@ def _user_id(body: bytes) -> int | None:
     return user_id
 
 
-def _retry_after(response: UpstreamResponse) -> int:
+def retry_after(response: UpstreamResponse) -> int:
     for name, value in response.headers:
         if name.lower() == b"retry-after" and value.isdigit() and int(value) > 0:
             return min(int(value), 3600)
@@ -93,16 +93,16 @@ def interpret(endpoint: Endpoint, response: UpstreamResponse) -> int:
         if (user_id := _user_id(response.body)) is not None:
             return user_id
     elif status in PASSED_ERRORS[path]:
-        if (error := _error_body(response.body)) is not None:
+        if (error := error_body(response.body)) is not None:
             raise UserServiceError(status, **error)
     elif status == 500:
         # Подробности MS-3 клиенту не нужны и не отдаются.
         logger.warning("user_service_failed", route=endpoint.gateway_path)
         raise GatewayError()
     elif status == 503:
-        error = _error_body(response.body)
+        error = error_body(response.body)
         if error is not None and error["code"] == "SERVICE_BUSY":
-            raise UpstreamBusy(endpoint.upstream, _retry_after(response))
+            raise UpstreamBusy(endpoint.upstream, retry_after(response))
     # Любой другой статус и тело, которое не разобрать, — нарушение контракта MS-3.
     logger.warning(
         "user_service_contract_violation", route=endpoint.gateway_path, status=status

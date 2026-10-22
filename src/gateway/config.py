@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import (
     AnyHttpUrl,
     Field,
+    SecretStr,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -56,6 +57,10 @@ class Settings(BaseSettings):
     # Приватный ключ подписи JWT: EC P-256 в PEM без пароля. Только файл, не значение.
     jwt_private_key_file: Path
     jwt_ttl_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
+    # Хранилище отозванных токенов. Адрес может содержать пароль, поэтому SecretStr.
+    redis_url: SecretStr
+    redis_connect_timeout_seconds: float = Field(default=1, gt=0, le=30)
+    redis_operation_timeout_seconds: float = Field(default=1, gt=0, le=30)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     otel_exporter_otlp_endpoint: AnyHttpUrl | None = None
 
@@ -64,6 +69,13 @@ class Settings(BaseSettings):
     @classmethod
     def optional_collector(cls, value: str | None) -> str | None:
         return None if value == "" else value
+
+    @field_validator("redis_url")
+    @classmethod
+    def redis_scheme(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().startswith(("redis://", "rediss://")):
+            raise ValueError("REDIS_URL must start with redis:// or rediss://")
+        return value
 
     @field_validator("trusted_proxies")
     @classmethod

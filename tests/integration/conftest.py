@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -90,5 +91,42 @@ def open_gateway() -> Callable[..., object]:
         ) as client:
             yield client
             await app.state.upstream_client.aclose()
+
+    return open_
+
+
+@pytest.fixture
+def real_redis_url() -> str:
+    """Настоящий Redis: его поднимает docker-compose.test.yml."""
+    url = os.environ.get("TEST_REDIS_URL")
+    if not url:
+        pytest.skip("TEST_REDIS_URL is set only by docker-compose.test.yml")
+    return url
+
+
+@pytest.fixture
+def open_auth_gateway() -> Callable[..., object]:
+    """Gateway с заглушками MS-4 и MS-3 под uvicorn и заданным Redis."""
+
+    @asynccontextmanager
+    async def open_(
+        recipes_url: str, user_url: str, redis_url: str, **overrides: object
+    ):
+        settings = Settings(
+            _env_file=None,
+            upstream_recipes_url=recipes_url,
+            upstream_dictionary_url="http://dictionary:8000",
+            upstream_user_url=user_url,
+            redis_url=redis_url,
+            rate_limit_enabled=False,
+            **overrides,
+        )
+        app = create_app(settings)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        ) as client:
+            yield client
+            await app.state.upstream_client.aclose()
+            await app.state.revocations._client.aclose()
 
     return open_

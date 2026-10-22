@@ -8,26 +8,35 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from prometheus_client import CollectorRegistry
 from prometheus_fastapi_instrumentator import Instrumentator
+from redis.asyncio import Redis
 from starlette.types import ASGIApp
 
 from gateway import __version__
-from gateway.api import install_openapi, load_contracts, register_routes
+from gateway.api import (
+    check_protected_routes,
+    install_openapi,
+    load_contracts,
+    register_routes,
+)
 from gateway.asgi import RequestContextMiddleware, StripTraceContext
 from gateway.auth import AUTH_ROUTE
 from gateway.config import Settings
 from gateway.errors import register_error_handlers
 from gateway.health import router as health_router
-from gateway.metrics import RateLimitMetrics, UpstreamMetrics
+from gateway.logout import register_logout
+from gateway.metrics import AuthMetrics, RateLimitMetrics, UpstreamMetrics
 from gateway.observability import (
     configure_logging,
     create_tracer_provider,
     redact_client_span,
     redact_span,
 )
+from gateway.profile import PROFILE_ROUTE
 from gateway.proxy import UpstreamClient
 from gateway.ratelimit import AUTH_LIMITED_ENDPOINTS, LIMITED_ENDPOINTS, RateLimiter
+from gateway.revocation import RevocationStore, create_redis
 from gateway.routing import load_routes
-from gateway.tokens import TokenIssuer
+from gateway.tokens import TokenIssuer, TokenVerifier
 
 logger = structlog.get_logger()
 
@@ -36,13 +45,15 @@ logger = structlog.get_logger()
 def create_app(
     settings: Settings | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    redis_client: Redis | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     configure_logging(settings.log_level)
     provider = create_tracer_provider(settings)
     upstreams = settings.upstream_urls()
-    # Вход и регистрация описаны в коде, а не в routes.toml: ответ MS-3 не проксируется.
-    routes = (*load_routes(settings.routes_file, upstreams), AUTH_ROUTE)
+    # Вход, регистрация и профиль описаны в коде, а не в routes.toml: ответ MS-3 не
+    # проксируется побайтно.
+    routes = (*load_routes(settings.routes_file, upstreams), AUTH_ROUTE, PROFILE_ROUTE)
     contract = load_contracts(
         settings.contract_file,
         settings.contract_dictionary_file,
@@ -52,6 +63,9 @@ def create_app(
         settings.jwt_private_key_file, settings.jwt_ttl_seconds
     )
     registry = CollectorRegistry()
+    # Соединение с Redis ленивое: gateway стартует и без него, гостевые маршруты живут.
+    redis = create_redis(settings) if redis_client is None else redis_client
+    auth_metrics = AuthMetrics(registry)
     client = UpstreamClient(
         settings, upstreams, transport=transport, metrics=UpstreamMetrics(registry)
     )
@@ -80,6 +94,7 @@ def create_app(
         finally:
             HTTPXClientInstrumentor.uninstrument_client(client.client)
             await client.aclose()
+            await redis.aclose()
             provider.shutdown()
             logger.info("service_stopped")
 
@@ -94,6 +109,9 @@ def create_app(
     app.state.tracer_provider = provider
     app.state.upstream_client = client
     app.state.token_issuer = token_issuer
+    app.state.token_verifier = TokenVerifier.for_issuer(token_issuer)
+    app.state.auth_metrics = auth_metrics
+    app.state.revocations = RevocationStore(redis, auth_metrics, settings)
     limiter = (
         RateLimiter(
             requests=settings.rate_limit_requests,
@@ -142,6 +160,8 @@ def create_app(
     register_error_handlers(app)
     app.include_router(health_router)
     register_routes(app, routes, contract, settings.max_request_body_bytes)
+    register_logout(app)
+    check_protected_routes(app)
     install_openapi(app, routes, contract)
     app.add_middleware(RequestContextMiddleware)
     Instrumentator(

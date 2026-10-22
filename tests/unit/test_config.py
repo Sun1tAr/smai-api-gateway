@@ -86,6 +86,7 @@ def test_upstream_url_lookup_by_name() -> None:
 def test_user_service_and_key_are_required(monkeypatch) -> None:
     monkeypatch.delenv("UPSTREAM_USER_URL")
     monkeypatch.delenv("JWT_PRIVATE_KEY_FILE")
+    monkeypatch.delenv("REDIS_URL")
     with pytest.raises(ValidationError) as error:
         Settings(
             _env_file=None,
@@ -93,7 +94,7 @@ def test_user_service_and_key_are_required(monkeypatch) -> None:
             upstream_dictionary_url="http://dictionary:8000",
         )
     fields = {item["loc"][0] for item in error.value.errors()}
-    assert fields == {"upstream_user_url", "jwt_private_key_file"}
+    assert fields == {"upstream_user_url", "jwt_private_key_file", "redis_url"}
 
 
 def test_user_url_must_be_an_origin() -> None:
@@ -127,3 +128,52 @@ def test_jwt_defaults() -> None:
     assert settings.jwt_ttl_seconds == 86_400
     assert settings.contract_user_file == Path("contracts/user.openapi.json")
     assert "user" in settings.upstream_urls()
+
+
+def test_redis_defaults() -> None:
+    settings = make(
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+    )
+    assert settings.redis_connect_timeout_seconds == 1
+    assert settings.redis_operation_timeout_seconds == 1
+    assert settings.redis_url.get_secret_value() == "redis://redis:6379/0"
+
+
+@pytest.mark.parametrize(
+    "value", ["", "redis", "http://redis:6379", "unix:///run/redis.sock", "tcp://r:1"]
+)
+def test_redis_url_scheme_is_checked_without_echoing_the_value(value: str) -> None:
+    secret = f"{value}-hunter2"
+    with pytest.raises(ValidationError) as error:
+        make(
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+            redis_url=secret,
+        )
+    assert "REDIS_URL" in str(error.value)
+    assert "hunter2" not in str(error.value)
+
+
+def test_rediss_with_password_is_accepted_and_hidden() -> None:
+    settings = make(
+        upstream_recipes_url="http://recipes:8000",
+        upstream_dictionary_url="http://dictionary:8000",
+        redis_url="rediss://:hunter2@redis:6380/1",
+    )
+    assert "hunter2" not in repr(settings)
+    assert "hunter2" not in str(settings)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["redis_connect_timeout_seconds", "redis_operation_timeout_seconds"],
+)
+@pytest.mark.parametrize("value", [0, -1, 31])
+def test_redis_timeouts_are_bounded(name: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        make(
+            upstream_recipes_url="http://recipes:8000",
+            upstream_dictionary_url="http://dictionary:8000",
+            **{name: value},
+        )

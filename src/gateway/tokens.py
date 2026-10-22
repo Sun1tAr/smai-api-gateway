@@ -1,9 +1,11 @@
 import base64
 import hashlib
 import json
+import re
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import jwt
@@ -86,3 +88,79 @@ class TokenIssuer:
         return jwt.encode(
             claims, self._key, algorithm=ALGORITHM, headers={"kid": self.kid}
         )
+
+
+_SUBJECT = re.compile(r"[1-9][0-9]{0,9}")
+# Колонка users.id в MS-3 — int32: больший sub там не существует.
+_MAX_USER_ID = 2**31 - 1
+_REQUIRED_CLAIMS = ["exp", "iat", "nbf", "jti", "sub"]
+
+
+class InvalidToken(Exception):
+    """Токен не прошёл проверку. `reason` идёт только в метрику и лог."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class VerifiedToken:
+    user_id: int
+    jti: str
+    exp: int
+
+
+class TokenVerifier:
+    """Проверяет JWT, выданный TokenIssuer, по его публичному ключу."""
+
+    def __init__(self, public_key: ec.EllipticCurvePublicKey, kid: str) -> None:
+        self._key = public_key
+        self._kid = kid
+
+    @classmethod
+    def for_issuer(cls, issuer: TokenIssuer) -> "TokenVerifier":
+        return cls(issuer.public_key, issuer.kid)
+
+    def verify(self, token: str) -> VerifiedToken:
+        # Алгоритм задан списком из одного значения: alg=none и HS256 с публичным
+        # ключом в роли секрета отклоняются самой библиотекой.
+        try:
+            header = jwt.get_unverified_header(token)
+        except jwt.PyJWTError:
+            raise InvalidToken("malformed") from None
+        if header.get("alg") != ALGORITHM:
+            raise InvalidToken("algorithm")
+        if header.get("kid") != self._kid:
+            raise InvalidToken("kid")
+        try:
+            claims = jwt.decode(
+                token,
+                self._key,
+                algorithms=[ALGORITHM],
+                issuer=ISSUER,
+                options={"require": _REQUIRED_CLAIMS},
+            )
+        except jwt.ExpiredSignatureError:
+            raise InvalidToken("expired") from None
+        except jwt.ImmatureSignatureError:
+            raise InvalidToken("not_yet_valid") from None
+        except jwt.InvalidSignatureError:
+            raise InvalidToken("signature") from None
+        except jwt.PyJWTError:
+            raise InvalidToken("claims") from None
+        subject, jti, exp = claims["sub"], claims["jti"], claims["exp"]
+        if (
+            not isinstance(subject, str)
+            or not _SUBJECT.fullmatch(subject)
+            or int(subject) > _MAX_USER_ID
+        ):
+            raise InvalidToken("claims")
+        # jti — ключ в Redis: только каноничный UUID, чужие формы не принимаем.
+        try:
+            canonical = isinstance(jti, str) and str(uuid.UUID(jti)) == jti
+        except ValueError:
+            canonical = False
+        if not canonical or isinstance(exp, bool) or not isinstance(exp, int):
+            raise InvalidToken("claims")
+        return VerifiedToken(user_id=int(subject), jti=jti, exp=exp)

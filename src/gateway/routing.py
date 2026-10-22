@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
 RESERVED_PREFIXES = frozenset(
-    {"health", "metrics", "docs", "redoc", "openapi.json", "auth"}
+    {"health", "metrics", "docs", "redoc", "openapi.json", "auth", "user"}
 )
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 

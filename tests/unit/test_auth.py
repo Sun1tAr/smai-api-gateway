@@ -469,12 +469,13 @@ def test_gateway_does_not_start_when_an_auth_route_is_missing() -> None:
         register_routes(FastAPI(), (*routes, no_login), contract, 65536)
 
 
-def test_auth_is_a_reserved_prefix(tmp_path) -> None:
+@pytest.mark.parametrize("prefix", ["auth", "user"])
+def test_auth_and_user_are_reserved_prefixes(tmp_path, prefix: str) -> None:
     from gateway.routing import RouteConfigError
 
     routes = tmp_path / "routes.toml"
     routes.write_text(
-        '[[route]]\nprefix = "auth"\nupstream = "user"\nallow = ["POST /x"]\n'
+        f'[[route]]\nprefix = "{prefix}"\nupstream = "user"\nallow = ["POST /x"]\n'
     )
     with pytest.raises(RouteConfigError, match="reserved"):
         load_routes(routes, {"user"})
@@ -557,7 +558,7 @@ def test_openapi_429_and_503_document_retry_after(schema: dict) -> None:
 def test_every_example_in_the_contract_validates_against_its_schema() -> None:
     checked = 0
     for item in CONTRACT["paths"].values():
-        for response in item["post"]["responses"].values():
+        for response in next(iter(item.values()))["responses"].values():
             media = response["content"]["application/json"]
             values = (
                 [media["example"]]
@@ -567,7 +568,7 @@ def test_every_example_in_the_contract_validates_against_its_schema() -> None:
             for value in values:
                 jsonschema.validate(value, media["schema"])
                 checked += 1
-    assert checked >= 14
+    assert checked >= 17
 
 
 async def test_real_responses_match_the_documented_examples(user, schema: dict) -> None:
