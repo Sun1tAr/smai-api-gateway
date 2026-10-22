@@ -263,7 +263,7 @@ class _Ticket:
 # общий потолок, они не делят счётчики. None — группа без лимита.
 def _limiters(
     state: Any, key: tuple[str, str]
-) -> tuple[RateLimiter | None, RateLimiter] | None:
+) -> tuple[RateLimiter | None, RateLimiter | None] | None:
     if key in LIMITED_ENDPOINTS:
         return state.rate_limiter, state.global_limiter
     if key in AUTH_LIMITED_ENDPOINTS:
@@ -280,6 +280,7 @@ async def edge_guard(request: Request) -> None:
     if limiters is None or limiters[0] is None:
         return
     limiter, global_limiter = limiters
+    assert global_limiter is not None  # задан всегда, когда задан клиентский
     client = request_client(request)
     key = rate_limit_key(client.ip, state.settings.rate_limit_ipv6_prefix)
     admission = limiter.check(key)

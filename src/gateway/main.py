@@ -119,10 +119,14 @@ def create_app(
         else None
     )
     app.state.auth_rate_limiter = auth_limiter
-    app.state.auth_global_limiter = RateLimiter(
-        requests=settings.auth_rate_limit_global_requests,
-        window_seconds=settings.rate_limit_window_seconds,
-        max_keys=1,
+    app.state.auth_global_limiter = (
+        RateLimiter(
+            requests=settings.auth_rate_limit_global_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=1,
+        )
+        if auth_limiter is not None
+        else None
     )
     app.state.rate_limit_metrics = RateLimitMetrics(
         registry,
@@ -130,7 +134,12 @@ def create_app(
             {path for _, path in LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS}
         ),
         tracked_keys=(
-            (lambda: app.state.rate_limiter.tracked_keys)
+            (
+                lambda: (
+                    app.state.rate_limiter.tracked_keys
+                    + (auth_limiter.tracked_keys if auth_limiter is not None else 0)
+                )
+            )
             if limiter is not None
             else None
         ),

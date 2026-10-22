@@ -62,7 +62,7 @@ cp .env.example .env
 echo 'RATE_LIMIT_KEY_BY_SOCKET=true' >> .env
 # Ключ подписи JWT (путь задаёт JWT_PRIVATE_KEY_PATH в .env, файл не коммитится)
 openssl ecparam -name prime256v1 -genkey -noout -out jwt-private.pem
-chmod 0444 jwt-private.pem   # локально; на stage/prod — 0400 и владелец UID 10001
+chmod 0444 jwt-private.pem   # только для одиночной dev-машины; на stage/prod — 0400 и владелец UID 10001
 docker compose --profile stub up --build --wait   # gateway + заглушки MS-4 и MS-3
 curl --fail http://127.0.0.1:8080/health
 curl -i -X POST http://127.0.0.1:8080/recipes/generate-menu \
@@ -106,6 +106,7 @@ curl -i -X POST http://127.0.0.1:8080/auth/register \
 | `CONTRACT_DICTIONARY_FILE` | Снимок контракта MS-2 для документации | `contracts/dictionary.openapi.json` |
 | `UPSTREAM_USER_URL` | Адрес MS-3 (пользователи) без пути, например `http://user:8000` | обязательна |
 | `JWT_PRIVATE_KEY_FILE` | Путь к PEM-файлу приватного ключа подписи JWT (EC P-256, без пароля) | обязательна |
+| `JWT_PRIVATE_KEY_PATH` | Только локальный Compose: путь на хосте к PEM-файлу ключа; Compose монтирует его секретом в `JWT_PRIVATE_KEY_FILE=/run/secrets/jwt_private_key` | обязательна в Compose |
 | `JWT_TTL_SECONDS` | Срок жизни токена, 60–2592000 | `86400` (24 часа) |
 | `CONTRACT_USER_FILE` | Снимок контракта API-8/API-9 для документации | `contracts/user.openapi.json` |
 | `AUTH_RATE_LIMIT_ENABLED` | Включает лимит на `/auth/*` (работает только при `RATE_LIMIT_ENABLED=true`) | `true` |
@@ -160,7 +161,11 @@ openssl ecparam -name prime256v1 -genkey -noout -out jwt-private.pem
 chmod 0400 jwt-private.pem && sudo chown 10001:10001 jwt-private.pem
 ```
 
-Файл монтируется в контейнер только на чтение (в Compose — секрет `jwt_private_key`,
+**Права на Linux.** Compose монтирует секрет как bind mount и сохраняет владельца и
+права файла с хоста: с `0400` и владельцем не UID 10001 gateway не стартует
+(`JWT_PRIVATE_KEY_FILE cannot be read`). Связка `chown 10001:10001` + `chmod 0400` на
+Linux-хосте пока не проверена (на Docker Desktop for Mac права скрыты): проверить на
+стенде до выкатки. Файл монтируется в контейнер только на чтение (в Compose — секрет `jwt_private_key`,
 путь на хосте задаёт `JWT_PRIVATE_KEY_PATH`), принадлежит непривилегированному
 пользователю gateway (UID 10001), не кладётся в образ и не коммитится (`*.pem` в
 `.gitignore` и `.dockerignore`). Публичная часть для проверки токенов нужна
