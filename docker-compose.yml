@@ -14,7 +14,7 @@ services:
       UPSTREAM_DICTIONARY_URL: ${UPSTREAM_DICTIONARY_URL:?Set UPSTREAM_DICTIONARY_URL}
       UPSTREAM_USER_URL: ${UPSTREAM_USER_URL:?Set UPSTREAM_USER_URL}
       # Список отозванных токенов; пароль, если он есть, только внутри URL.
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
       # Приватный ключ подписи JWT монтируется файлом (секрет Compose), только на чтение.
       JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

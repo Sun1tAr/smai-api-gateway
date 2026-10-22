@@ -26,6 +26,8 @@ def create_redis(settings: Settings) -> Redis:
         # Без ретраев: сбой Redis быстро превращается в 503, а не в зависший запрос.
         retry=Retry(NoBackoff(), 0),
         health_check_interval=0,
+        # Зависший Redis не должен раздувать число соединений.
+        max_connections=50,
     )
 
 

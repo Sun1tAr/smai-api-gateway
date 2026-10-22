@@ -90,7 +90,9 @@ class TokenIssuer:
         )
 
 
-_SUBJECT = re.compile(r"[1-9][0-9]{0,18}")
+_SUBJECT = re.compile(r"[1-9][0-9]{0,9}")
+# Колонка users.id в MS-3 — int32: больший sub там не существует.
+_MAX_USER_ID = 2**31 - 1
 _REQUIRED_CLAIMS = ["exp", "iat", "nbf", "jti", "sub"]
 
 
@@ -148,7 +150,11 @@ class TokenVerifier:
         except jwt.PyJWTError:
             raise InvalidToken("claims") from None
         subject, jti, exp = claims["sub"], claims["jti"], claims["exp"]
-        if not isinstance(subject, str) or not _SUBJECT.fullmatch(subject):
+        if (
+            not isinstance(subject, str)
+            or not _SUBJECT.fullmatch(subject)
+            or int(subject) > _MAX_USER_ID
+        ):
             raise InvalidToken("claims")
         # jti — ключ в Redis: только каноничный UUID, чужие формы не принимаем.
         try:

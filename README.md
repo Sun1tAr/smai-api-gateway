@@ -80,7 +80,7 @@ curl -i -X POST http://127.0.0.1:8080/auth/logout -H "Authorization: Bearer $TOK
 curl -i http://127.0.0.1:8080/user/profile -H "Authorization: Bearer $TOKEN"   # 401
 ```
 
-Compose поднимает и локальный Redis (сервис `redis`, только в сети `smai`).
+Compose поднимает и локальный Redis (сервис `redis`, только в сети `smai`); `REDIS_URL` в `.env` обязателен, как и в контуре (в `.env.example` он уже стоит).
 
 Без профиля `stub` запускается только gateway; MS-4 должен быть в сети `smai` под
 именем `recipes`, MS-3 — под именем `user` (оба на порту 8000). Порты на хосте: gateway `GATEWAY_HTTP_PORT`
@@ -202,9 +202,9 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 регистра, один заголовок, один токен, до 4096 символов. Затем подпись `ES256` по
 публичному ключу gateway (алгоритм задан в коде: `alg=none`, HS256 и другие
 отклоняются), `kid` текущего ключа, `iss=smai-gateway`, наличие `exp`, `iat`, `nbf`,
-`jti`, `sub` без запаса по времени, `sub` — целое > 0, `jti` — UUID. Любая ошибка даёт
+`jti`, `sub` без запаса по времени, `sub` — целое от 1 до 2147483647 (int32, как `users.id` в MS-3), `jti` — UUID. Любая ошибка даёт
 одинаковый 401 `UNAUTHORIZED`; причина (`missing`, `malformed`, `algorithm`, `kid`,
-`signature`, `expired`, `not_yet_valid`, `claims`, `revoked`) видна только в логе и в
+`signature`, `expired`, `not_yet_valid`, `claims`, `revoked`, `user_not_found`) видна только в логе и в
 метрике `gateway_token_rejected_total{reason}`, сам токен нигде не пишется. Потом
 проверяется список отозванных в Redis. Идентификатор пользователя берётся из `sub`;
 клиентский `X-User-Id` (любой регистр, дубли) срезается, а `Authorization` в сервисы

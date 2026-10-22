@@ -99,7 +99,13 @@ async def fetch_profile(
         headers=headers,
         body=b"",
     )
+    try:
+        profile = interpret_profile(upstream, user.user_id)
+    except Unauthorized:
+        # 404 от MS-3: токен выдан пользователю, которого нет; это тоже отказ по токену.
+        request.app.state.auth_metrics.rejected.labels("user_not_found").inc()
+        raise
     return JSONResponse(
-        interpret_profile(upstream, user.user_id),
+        profile,
         headers={"Cache-Control": "no-store"},
     )

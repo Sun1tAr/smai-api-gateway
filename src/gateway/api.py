@@ -202,6 +202,16 @@ def _protected_503(endpoint: Endpoint, limit: int) -> dict[str, Any]:
             "application/json": {
                 "examples": {
                     "redis": {"summary": "Redis недоступен", "value": redis},
+                    "busy": {
+                        "summary": "MS-3 занят (заголовок Retry-After)",
+                        "value": {
+                            "error": {
+                                "code": "EXTERNAL_SERVICE_ERROR",
+                                "message": UpstreamBusy.message,
+                                "details": {"upstream": "user", "reason": "busy"},
+                            }
+                        },
+                    },
                     "pool": {
                         "summary": "Пул соединений исчерпан",
                         "value": _gateway_example(503, endpoint.upstream, limit),

@@ -84,6 +84,7 @@ TOKEN_REJECT_REASONS = (
     "not_yet_valid",
     "claims",
     "revoked",
+    "user_not_found",
 )
 
 

@@ -769,6 +769,8 @@ def test_openapi_documents_both_routes(app: FastAPI) -> None:
     assert redis["error"]["details"] == {"upstream": "redis", "reason": "connect"}
     examples = profile["responses"]["503"]["content"]["application/json"]["examples"]
     assert examples["redis"]["value"]["error"]["details"]["upstream"] == "redis"
+    busy = examples["busy"]["value"]["error"]["details"]
+    assert busy == {"upstream": "user", "reason": "busy"}
     assert examples["pool"]["value"]["error"]["details"]["reason"] == "pool"
 
 
@@ -826,3 +828,14 @@ async def test_authorization_and_user_id_are_not_forwarded_to_other_services(
     sent = user.requests[0].headers
     assert "authorization" not in sent
     assert "x-user-id" not in sent
+
+
+async def test_deleted_user_is_counted_as_a_rejected_token(gateway, app, user) -> None:
+    user.respond(
+        404, {"error": {"code": "USER_NOT_FOUND", "message": "m", "details": {}}}
+    )
+    assert (await gateway.get("/user/profile", headers=bearer(app))).status_code == 401
+    text = (await gateway.get("/metrics")).text
+    assert (
+        sample(text, "gateway_token_rejected_total", '{reason="user_not_found"}') == 1
+    )

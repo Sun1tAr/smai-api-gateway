@@ -147,7 +147,23 @@ def test_unknown_or_missing_kid_is_rejected(issuer, verifier, key) -> None:
 
 
 @pytest.mark.parametrize(
-    "subject", ["0", "-1", "abc", "01", "1.5", "", " 1", "1 ", "1e3", 42, None, True]
+    "subject",
+    [
+        "2147483648",
+        "9999999999",
+        "0",
+        "-1",
+        "abc",
+        "01",
+        "1.5",
+        "",
+        " 1",
+        "1 ",
+        "1e3",
+        42,
+        None,
+        True,
+    ],
 )
 def test_bad_subject_is_rejected(issuer, verifier, key, subject: object) -> None:
     payload = claims()
@@ -203,3 +219,8 @@ def test_verifier_never_raises_anything_but_invalid_token(
     ):
         with pytest.raises(InvalidToken):
             verifier.verify(broken)
+
+
+def test_largest_int32_subject_is_accepted(issuer, verifier, key) -> None:
+    token = sign(key, claims(sub="2147483647"), issuer.kid)
+    assert verifier.verify(token).user_id == 2147483647
