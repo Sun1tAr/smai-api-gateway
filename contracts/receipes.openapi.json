@@ -3,13 +3,13 @@
   "info": {
     "title": "smai-api-receipes (контракт MS-4, снимок)",
     "version": "v1",
-    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55)."
+    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55); API-1 с необязательным токеном и API-13 (SMAI-A-306, SMAI-102)."
   },
   "paths": {
     "/generate-menu": {
       "post": {
         "summary": "Запуск генерации меню (API-1)",
-        "description": "Создаёт задачу генерации недельного меню и сразу возвращает её идентификатор. Сама генерация выполняется в фоне; результат запрашивается через `GET /recipes/generate-menu/{task_id}`. Если ответ потерян (например, 504), повторять запрос автоматически нельзя: задача могла быть создана, а повтор запустит вторую генерацию.",
+        "description": "Создаёт задачу генерации недельного меню и сразу возвращает её идентификатор. Сама генерация выполняется в фоне; результат запрашивается через `GET /recipes/generate-menu/{task_id}`. Если ответ потерян (например, 504), повторять запрос автоматически нельзя: задача могла быть создана, а повтор запустит вторую генерацию.\n\nТокен необязателен. Без заголовка `Authorization` запрос гостевой: меню создаётся как раньше, параметры ни за кем не сохраняются. С действительным токеном (`Authorization: Bearer <jwt>`) задача создаётся от имени пользователя, и после готовности меню его параметры возвращает `GET /recipes/profile/parameters`. Недействительный токен (подпись, срок, формат, отзыв) даёт 401, а не гостевой режим. Исключение: если хранилище отзывов (Redis) недоступно, отзыв проверить нельзя, и запрос с токеном обрабатывается как гостевой: меню создаётся, параметры не сохраняются. В этом случае отозванный токен тоже идёт как гостевой, а не получает 401; неверная подпись, истёкший срок и неверный формат дают 401 и при сбое Redis.",
         "requestBody": {
           "required": true,
           "content": {
@@ -112,6 +112,48 @@
                         }
                       ]
                     }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен передан, но недействителен: неверная подпись, истёк срок, неверный формат заголовка или токен отозван через `POST /auth/logout`. Причина в ответе не раскрывается. Без токена запрос не отклоняется. В ответе `WWW-Authenticate: Bearer`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
                   }
                 }
               }
@@ -532,6 +574,174 @@
             "description": "Идентификатор задачи, полученный от API-1."
           }
         ]
+      }
+    },
+    "/profile/parameters": {
+      "get": {
+        "summary": "Сохранённые параметры генерации",
+        "description": "Возвращает параметры последней успешной генерации текущего пользователя для предзаполнения формы: `habits`, `diet`, `allergies`, `kitchenTools`. Это параметры самой свежей его задачи в статусе `done` (по времени создания); задачи в обработке и с ошибкой не учитываются, новая успешная генерация заменяет прежний результат. `peopleCount` и `weeklyBudget` не сохраняются. Если готовых генераций ещё нет, отвечает 200 с пустыми списками и `diet: null`. Параметры чужих пользователей недоступны. Токен обязателен: `Authorization: Bearer <jwt>`.",
+        "responses": {
+          "200": {
+            "description": "Сохранённые параметры или пустой ответ, если готовых генераций нет.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "habits",
+                    "diet",
+                    "allergies",
+                    "kitchenTools"
+                  ],
+                  "properties": {
+                    "habits": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "ID привычек по возрастанию."
+                    },
+                    "diet": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "ID диеты или null."
+                    },
+                    "allergies": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "ID аллергенов по возрастанию."
+                    },
+                    "kitchenTools": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "ID кухонной техники по возрастанию."
+                    }
+                  }
+                },
+                "examples": {
+                  "saved": {
+                    "summary": "Параметры сохранены",
+                    "value": {
+                      "habits": [
+                        3,
+                        5
+                      ],
+                      "diet": 4,
+                      "allergies": [
+                        1,
+                        2
+                      ],
+                      "kitchenTools": [
+                        1,
+                        2,
+                        6
+                      ]
+                    }
+                  },
+                  "empty": {
+                    "summary": "Готовых генераций ещё нет",
+                    "value": {
+                      "habits": [],
+                      "diet": null,
+                      "allergies": [],
+                      "kitchenTools": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат) или отозван через `POST /auth/logout`. Причина в ответе не раскрывается. В ответе `WWW-Authenticate: Bearer`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса (например, недоступна база данных).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

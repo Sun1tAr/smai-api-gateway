@@ -113,3 +113,19 @@ async def health() -> dict[str, str]:
 @app.get("/metrics")
 async def metrics() -> Response:
     return Response("stub_internal_metric 1\n", media_type="text/plain")
+
+
+# API-13: у заглушки «сохранены» параметры пользователя 7, у остальных пусто.
+SAVED_PARAMETERS = {
+    7: {"habits": [3, 5], "diet": 4, "allergies": [1, 2], "kitchenTools": [1, 2, 6]}
+}
+NO_PARAMETERS = {"habits": [], "diet": None, "allergies": [], "kitchenTools": []}
+
+
+@app.get("/profile/parameters")
+async def profile_parameters(request: Request) -> Response:
+    raw = request.headers.get("x-user-id")
+    if raw is None or not raw.isdigit():
+        return error(401, "UNAUTHORIZED", "User is not identified")
+    body = SAVED_PARAMETERS.get(int(raw), NO_PARAMETERS)
+    return Response(json.dumps(body), media_type="application/json")

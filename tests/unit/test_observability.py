@@ -221,10 +221,13 @@ async def test_logs_are_json_and_do_not_contain_query_or_body(
         await client.post(
             "/recipes/generate-menu?token=SECRETQUERY",
             content=b'{"note":"SECRETBODY"}',
-            headers={
-                "Authorization": "Bearer SECRETTOKEN",
-                "Cookie": "s=SECRETCOOKIE",
-            },
+            headers={"Cookie": "s=SECRETCOOKIE"},
+        )
+        # Недействительный токен отклоняется до MS-4, но в лог не попадает.
+        await client.post(
+            "/recipes/generate-menu",
+            content=b"{}",
+            headers={"Authorization": "Bearer SECRETTOKEN"},
         )
     output = capsys.readouterr().out
     events = [json.loads(line) for line in output.splitlines() if line.startswith("{")]

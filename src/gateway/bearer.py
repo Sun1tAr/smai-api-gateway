@@ -7,7 +7,7 @@ import structlog
 from fastapi import Depends, Request
 from fastapi.security import HTTPBearer
 
-from gateway.errors import Unauthorized
+from gateway.errors import RedisUnavailable, Unauthorized
 from gateway.tokens import InvalidToken, VerifiedToken
 
 logger = structlog.get_logger()
@@ -77,13 +77,24 @@ def authenticate_request(
     """Зависимость маршрута: проверяет токен и кладёт `request.state.user`.
 
     required=False: без заголовка запрос идёт как гостевой (`user` = None), но
-    заголовок, который есть, проверяется так же строго.
+    заголовок, который есть, проверяется так же строго: подпись, срок и формат
+    дают 401. Исключение одно: если Redis недоступен и отзыв проверить нельзя,
+    запрос идёт как гостевой (владелец не передаётся, параметры не сохраняются).
+    Права это не добавляет: гость не получает ничего, что есть у пользователя.
     """
 
     async def dependency(
         request: Request, _: Annotated[object, Depends(bearer_scheme)]
     ) -> AuthenticatedUser | None:
-        user = await _authenticate(request)
+        try:
+            user = await _authenticate(request)
+        except RedisUnavailable:
+            if required:
+                raise
+            # Токена и jti в логе нет; причина сбоя уже записана в `redis_failed`.
+            request.app.state.auth_metrics.fallback_guest.inc()
+            logger.warning("token_redis_down_guest")
+            user = None
         if user is None and required:
             raise _reject(request, "missing")
         request.state.user = user

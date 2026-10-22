@@ -264,9 +264,10 @@ async def test_edge_guard_runs_on_every_proxied_route(settings, upstream) -> Non
         for r in app.routes
         if isinstance(r, APIRoute) and r.path.startswith("/recipes")
     ]
-    assert len(proxied) == 2
+    assert len(proxied) == 3
     for route in proxied:
-        assert [d.call for d in route.dependant.dependencies] == [edge_guard]
+        # Токен (если он есть у маршрута) проверяется раньше лимитера.
+        assert route.dependant.dependencies[-1].call is edge_guard
 
 
 async def test_upstream_down_is_502_in_error_format(settings) -> None:

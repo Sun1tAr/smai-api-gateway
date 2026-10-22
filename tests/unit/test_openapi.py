@@ -15,11 +15,13 @@ DICTIONARY_CONTRACT = json.loads(
 OPERATIONS = [
     ("/recipes/generate-menu", "post", "/generate-menu"),
     ("/recipes/generate-menu/{task_id}", "get", "/generate-menu/{task_id}"),
+    ("/recipes/profile/parameters", "get", "/profile/parameters"),
 ]
 GATEWAY_CODES = {
     ("post", "/recipes/generate-menu"): {
         "202",
         "400",
+        "401",
         "413",
         "429",
         "500",
@@ -31,6 +33,16 @@ GATEWAY_CODES = {
         "200",
         "400",
         "404",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    # Токен обязателен: 503 бывает и из-за Redis. 404 нет: пустой ответ это 200.
+    ("get", "/recipes/profile/parameters"): {
+        "200",
+        "400",
+        "401",
         "500",
         "502",
         "503",
@@ -153,7 +165,9 @@ async def test_gateway_error_examples_carry_the_right_reason(
 ) -> None:
     responses = schema["paths"][path][method]["responses"]
     for status, reason in (("502", "connect"), ("503", "pool"), ("504", "timeout")):
-        example = responses[status]["content"]["application/json"]["example"]
+        media = responses[status]["content"]["application/json"]
+        # У защищённых маршрутов 503 несёт несколько примеров (Redis, пул).
+        example = media.get("example") or media["examples"]["pool"]["value"]
         assert example["error"]["details"] == {"upstream": "recipes", "reason": reason}
     gateway_400 = responses["400"]["content"]["application/json"]
     example = (
