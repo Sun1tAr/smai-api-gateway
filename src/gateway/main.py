@@ -133,15 +133,10 @@ def create_app(
         limited_routes=sorted(
             {path for _, path in LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS}
         ),
-        tracked_keys=(
-            (
-                lambda: (
-                    app.state.rate_limiter.tracked_keys
-                    + (auth_limiter.tracked_keys if auth_limiter is not None else 0)
-                )
-            )
-            if limiter is not None
-            else None
+        tracked_keys=lambda: sum(
+            item.tracked_keys
+            for item in (app.state.rate_limiter, app.state.auth_rate_limiter)
+            if item is not None
         ),
     )
     register_error_handlers(app)
