@@ -11,8 +11,12 @@ from dataclasses import dataclass
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
-# Ограничиваются только операции, которые запускают дорогую LLM-генерацию.
+# Ограничена дорогая LLM-генерация.
 LIMITED_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu")})
+# Вход и регистрация: перебор паролей и заливка дорогим хэшированием в MS-3.
+AUTH_LIMITED_ENDPOINTS = frozenset(
+    {("POST", "/auth/register"), ("POST", "/auth/login")}
+)
 UNKNOWN_CLIENT = "unknown"
 GLOBAL_KEY = "*"
 # Доверять можно узкой группе прокси: короткий префикс почти наверняка опечатка.

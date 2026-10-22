@@ -17,8 +17,22 @@ services:
     environment:
       UPSTREAM_RECIPES_URL: http://recipes:8000
       UPSTREAM_DICTIONARY_URL: http://dictionary:8000
+      UPSTREAM_USER_URL: http://user:8000
+      # Одноразовый ключ только для этого тестового контейнера.
+      JWT_PRIVATE_KEY_FILE: /tmp/jwt-private.pem
       # Smoke-тесты шлют много запросов подряд и не проверяют лимит.
       RATE_LIMIT_ENABLED: "false"
+    command:
+      - sh
+      - -c
+      - >-
+        python -c "from cryptography.hazmat.primitives import serialization as s;
+        from cryptography.hazmat.primitives.asymmetric import ec;
+        key = ec.generate_private_key(ec.SECP256R1());
+        open('/tmp/jwt-private.pem', 'wb').write(key.private_bytes(s.Encoding.PEM,
+        s.PrivateFormat.PKCS8, s.NoEncryption()))"
+        && exec uvicorn gateway.main:create_app --factory --host 0.0.0.0 --port 8000
+        --workers 1 --no-access-log --no-server-header --no-proxy-headers
     depends_on:
       recipes:
         condition: service_healthy

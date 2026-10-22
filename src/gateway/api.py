@@ -9,11 +9,13 @@ import structlog
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.openapi.utils import get_openapi
 
+from gateway.auth import AUTH_ROUTE, authenticate
 from gateway.errors import (
     ErrorResponse,
     InvalidRequestPath,
     PayloadTooLarge,
     RateLimited,
+    UpstreamBusy,
     UpstreamOverloaded,
     UpstreamUnavailable,
 )
@@ -21,6 +23,7 @@ from gateway.health import metrics_path_item
 from gateway.policy import client_response_headers, upstream_request_headers
 from gateway.proxy import UpstreamClient, read_limited_body
 from gateway.ratelimit import (
+    AUTH_LIMITED_ENDPOINTS,
     GLOBAL_KEY,
     LIMITED_ENDPOINTS,
     RateLimiter,
@@ -32,12 +35,14 @@ from gateway.routing import Endpoint, InvalidPath, Route, upstream_target
 
 logger = structlog.get_logger()
 _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
-# Ответы, при которых генерация в MS-4 не начиналась: попытка в лимит не идёт.
+# Ответы, при которых работа в сервисе не начиналась (генерация в MS-4, проверка
+# пароля в MS-3): попытка в лимит не идёт.
 _NOT_REACHED = (
     InvalidRequestPath,
     PayloadTooLarge,
     UpstreamUnavailable,
     UpstreamOverloaded,
+    UpstreamBusy,
 )
 _PARAM = re.compile(r"\{[a-z][a-z0-9_]*\}")
 
@@ -188,14 +193,15 @@ def _operation_docs(
         if status == 413 and endpoint.method not in _BODY_METHODS:
             continue
         if status == 429 and (endpoint.method, endpoint.gateway_path) not in (
-            LIMITED_ENDPOINTS
+            LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS
         ):
             continue
         responses[status] = _gateway_response(status, endpoint.upstream, limit)
     # Ответы MS-4 описывают его собственные ошибки и перекрывают общие.
     for status, response in operation["responses"].items():
         response = dict(_contract_response(where, status, response))
-        if status == "400":
+        # /auth/* не разбирает путь, поэтому 400 за небезопасный путь там невозможен.
+        if status == "400" and endpoint not in AUTH_ROUTE.endpoints:
             response["description"] += " " + _GATEWAY_ERRORS[400][0]
         responses[status] = response
     extra: dict[str, Any] = {}
@@ -240,8 +246,8 @@ def _refund_rate_limit(request: Request) -> None:
     if ticket is None:
         return
     request.state.rate_ticket = None
-    request.app.state.rate_limiter.refund(ticket.key, ticket.stamp)
-    request.app.state.global_limiter.refund(GLOBAL_KEY, ticket.global_stamp)
+    ticket.limiter.refund(ticket.key, ticket.stamp)
+    ticket.global_limiter.refund(GLOBAL_KEY, ticket.global_stamp)
 
 
 @dataclass
@@ -249,27 +255,42 @@ class _Ticket:
     key: str
     stamp: float
     global_stamp: float
+    limiter: RateLimiter
+    global_limiter: RateLimiter
+
+
+# Лимитеры по ключу «метод + путь»: у каждой группы свой бакет клиента и свой
+# общий потолок, они не делят счётчики. None — группа без лимита.
+def _limiters(
+    state: Any, key: tuple[str, str]
+) -> tuple[RateLimiter | None, RateLimiter] | None:
+    if key in LIMITED_ENDPOINTS:
+        return state.rate_limiter, state.global_limiter
+    if key in AUTH_LIMITED_ENDPOINTS:
+        return state.auth_rate_limiter, state.auth_global_limiter
+    return None
 
 
 # Вход в проксируемый маршрут: лимит запросов; сюда же встанет проверка пользователя.
 # Должна оставаться async def: в threadpool проверка и запись начали бы гоняться.
 async def edge_guard(request: Request) -> None:
     state = request.app.state
-    limiter: RateLimiter | None = state.rate_limiter
     route = request.scope.get("route")
-    if limiter is None or (request.method, getattr(route, "path", "")) not in (
-        LIMITED_ENDPOINTS
-    ):
+    limiters = _limiters(state, (request.method, getattr(route, "path", "")))
+    if limiters is None or limiters[0] is None:
         return
+    limiter, global_limiter = limiters
     client = request_client(request)
     key = rate_limit_key(client.ip, state.settings.rate_limit_ipv6_prefix)
     admission = limiter.check(key)
     scope = "table_full" if admission.table_full else "client"
     fingerprint = limiter.fingerprint(key)
     if admission.allowed:
-        overall = state.global_limiter.check(GLOBAL_KEY)
+        overall = global_limiter.check(GLOBAL_KEY)
         if overall.allowed:
-            request.state.rate_ticket = _Ticket(key, admission.stamp, overall.stamp)
+            request.state.rate_ticket = _Ticket(
+                key, admission.stamp, overall.stamp, limiter, global_limiter
+            )
             return
         limiter.refund(key, admission.stamp)
         admission, scope, fingerprint = overall, "global", GLOBAL_KEY
@@ -299,6 +320,10 @@ def _register(
             raise
 
     async def _proxy(request: Request) -> Response:
+        if endpoint in AUTH_ROUTE.endpoints:
+            return await authenticate(
+                request, endpoint, limit, request_client(request).ip
+            )
         client: UpstreamClient = request.app.state.upstream_client
         raw_path = request.scope.get("raw_path") or request.scope["path"].encode()
         try:
@@ -355,7 +380,7 @@ def register_routes(
             _register(app, endpoint, _operation_docs(endpoint, contract, limit), limit)
             registered.add((endpoint.method, endpoint.gateway_path))
     # Переименованный путь иначе тихо остался бы без лимита.
-    missing = LIMITED_ENDPOINTS - registered
+    missing = (LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS) - registered
     if missing:
         raise ContractError(f"rate limited endpoints are not routed: {sorted(missing)}")
 
@@ -396,7 +421,7 @@ def install_openapi(
                     ]
                     for status, response in source["responses"].items():
                         content = copy.deepcopy(response["content"])
-                        if status == "400":
+                        if status == "400" and endpoint not in AUTH_ROUTE.endpoints:
                             content = _merge_400(content, endpoint.upstream)
                         target["responses"][status]["content"] = content
                     if "requestBody" in source:

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     upstream_recipes_url: AnyHttpUrl
     upstream_dictionary_url: AnyHttpUrl
+    upstream_user_url: AnyHttpUrl
     upstream_connect_timeout_seconds: float = Field(default=3, gt=0, le=60)
     upstream_read_timeout_seconds: float = Field(default=10, gt=0, le=120)
     upstream_write_timeout_seconds: float = Field(default=5, gt=0, le=60)
@@ -39,6 +40,10 @@ class Settings(BaseSettings):
     rate_limit_max_keys: int = Field(default=10_000, ge=1, le=1_000_000)
     # Общий потолок на всех клиентов: защищает LLM, даже если адресов много.
     rate_limit_global_requests: int = Field(default=100, ge=1, le=100_000)
+    # Вход и регистрация: свой бакет на клиента и свой общий потолок, отдельно от LLM.
+    auth_rate_limit_enabled: bool = True
+    auth_rate_limit_requests: int = Field(default=10, ge=1, le=10_000)
+    auth_rate_limit_global_requests: int = Field(default=60, ge=1, le=100_000)
     rate_limit_ipv6_prefix: int = Field(default=56, ge=48, le=64)
     # Явный выбор «ключ — адрес сокета» для запуска без доверенных прокси.
     rate_limit_key_by_socket: bool = False
@@ -47,6 +52,10 @@ class Settings(BaseSettings):
     routes_file: Path = Path("config/routes.toml")
     contract_file: Path = Path("contracts/receipes.openapi.json")
     contract_dictionary_file: Path = Path("contracts/dictionary.openapi.json")
+    contract_user_file: Path = Path("contracts/user.openapi.json")
+    # Приватный ключ подписи JWT: EC P-256 в PEM без пароля. Только файл, не значение.
+    jwt_private_key_file: Path
+    jwt_ttl_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     otel_exporter_otlp_endpoint: AnyHttpUrl | None = None
 
@@ -71,8 +80,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def rate_limit_is_safe_to_start(self) -> "Settings":
-        if self.rate_limit_requests * self.rate_limit_max_keys > 10_000_000:
-            raise ValueError("RATE_LIMIT_REQUESTS * RATE_LIMIT_MAX_KEYS is too large")
+        if (
+            max(self.rate_limit_requests, self.auth_rate_limit_requests)
+            * self.rate_limit_max_keys
+            > 10_000_000
+        ):
+            raise ValueError(
+                "(AUTH_)RATE_LIMIT_REQUESTS * RATE_LIMIT_MAX_KEYS is too large"
+            )
         # За обратным прокси без TRUSTED_PROXIES все клиенты окажутся в одном бакете.
         if (
             self.rate_limit_enabled
@@ -86,7 +101,9 @@ class Settings(BaseSettings):
         return self
 
     # Базовый адрес сервиса без пути: путь целиком задаёт таблица маршрутов.
-    @field_validator("upstream_recipes_url", "upstream_dictionary_url")
+    @field_validator(
+        "upstream_recipes_url", "upstream_dictionary_url", "upstream_user_url"
+    )
     @classmethod
     def origin_only(cls, value: AnyHttpUrl, info: ValidationInfo) -> AnyHttpUrl:
         if value.path not in (None, "", "/") or value.query or value.fragment:

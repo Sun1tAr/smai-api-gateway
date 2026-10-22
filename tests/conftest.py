@@ -3,6 +3,8 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from gateway.config import Settings
 from gateway.main import create_app
@@ -12,6 +14,32 @@ from gateway.main import create_app
 @pytest.fixture(autouse=True)
 def _socket_keyed_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RATE_LIMIT_KEY_BY_SOCKET", "true")
+
+
+def write_key(path, curve: ec.EllipticCurve | None = None):
+    key = ec.generate_private_key(curve or ec.SECP256R1())
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    return path
+
+
+# Ключ создаётся один раз на прогон; секретов в репозитории нет.
+@pytest.fixture(scope="session")
+def jwt_key_file(tmp_path_factory: pytest.TempPathFactory):
+    return write_key(tmp_path_factory.mktemp("jwt") / "jwt-private.pem")
+
+
+# Обязательные настройки входа задаются окружением, чтобы Settings(...) в тестах
+# мог их не повторять; конкретные тесты переопределяют их аргументами.
+@pytest.fixture(autouse=True)
+def _auth_environment(monkeypatch: pytest.MonkeyPatch, jwt_key_file) -> None:
+    monkeypatch.setenv("UPSTREAM_USER_URL", "http://user:8000")
+    monkeypatch.setenv("JWT_PRIVATE_KEY_FILE", str(jwt_key_file))
 
 
 @pytest.fixture

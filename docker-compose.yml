@@ -12,8 +12,13 @@ services:
     environment:
       UPSTREAM_RECIPES_URL: ${UPSTREAM_RECIPES_URL:?Set UPSTREAM_RECIPES_URL}
       UPSTREAM_DICTIONARY_URL: ${UPSTREAM_DICTIONARY_URL:?Set UPSTREAM_DICTIONARY_URL}
+      UPSTREAM_USER_URL: ${UPSTREAM_USER_URL:?Set UPSTREAM_USER_URL}
+      # Приватный ключ подписи JWT монтируется файлом (секрет Compose), только на чтение.
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    secrets:
+      - jwt_private_key
     ports:
       - "127.0.0.1:${GATEWAY_HTTP_PORT:-8080}:8000"
     networks:
@@ -35,6 +40,24 @@ services:
       smai:
         aliases:
           - recipes
+
+  # Заглушка MS-3: docker compose --profile stub up --build
+  user-stub:
+    profiles: [stub]
+    build:
+      context: .
+      target: test
+    command: ["uvicorn", "tests.stubs.user_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    networks:
+      smai:
+        aliases:
+          - user
+
+# PEM-файл ключа ES256 (P-256) без пароля: путь на хосте задаёт JWT_PRIVATE_KEY_PATH.
+# Файл не коммитить и не класть в образ; владелец UID 10001, права 0400.
+secrets:
+  jwt_private_key:
+    file: ${JWT_PRIVATE_KEY_PATH:?Set JWT_PRIVATE_KEY_PATH to the JWT private key PEM file}
 
 networks:
   smai:

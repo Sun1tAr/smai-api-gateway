@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-RESERVED_PREFIXES = frozenset({"health", "metrics", "docs", "redoc", "openapi.json"})
+RESERVED_PREFIXES = frozenset(
+    {"health", "metrics", "docs", "redoc", "openapi.json", "auth"}
+)
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 
 _PREFIX = re.compile(r"[a-z][a-z0-9-]*")
