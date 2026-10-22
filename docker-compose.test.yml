@@ -6,8 +6,11 @@ services:
       target: test
     environment:
       GATEWAY_URL: http://gateway:8000
+      TEST_REDIS_URL: redis://redis:6379/0
     depends_on:
       gateway:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   gateway:
@@ -18,6 +21,7 @@ services:
       UPSTREAM_RECIPES_URL: http://recipes:8000
       UPSTREAM_DICTIONARY_URL: http://dictionary:8000
       UPSTREAM_USER_URL: http://user:8000
+      REDIS_URL: redis://redis:6379/0
       # Одноразовый ключ только для этого тестового контейнера.
       JWT_PRIVATE_KEY_FILE: /tmp/jwt-private.pem
       # Smoke-тесты шлют много запросов подряд и не проверяют лимит.
@@ -58,6 +62,23 @@ services:
     depends_on:
       recipes:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Заглушка MS-3: регистрация, вход и профиль для сквозной проверки logout.
+  user:
+    build:
+      context: .
+      target: test
+    command: ["uvicorn", "tests.stubs.user_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
 
   recipes:
     build:
