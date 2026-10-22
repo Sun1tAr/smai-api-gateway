@@ -124,6 +124,7 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         "/metrics",
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
+        "/recipes/profile/parameters",
         "/user/profile",
     }
 

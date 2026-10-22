@@ -15,8 +15,9 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 
 | Метод и путь на gateway | Куда уходит в MS-4 | Успех | Контракт |
 | --- | --- | --- | --- |
-| `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}` | API-1 (SMAI-A-121) |
+| `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}`; токен необязателен (SMAI-102) | API-1 (SMAI-A-121) |
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}` | API-2 (SMAI-A-127) |
+| `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |
 | `POST /auth/login` | `POST /login` (MS-3) | 200 `{"userId","token"}` | API-9 (SMAI-A-261) |
@@ -39,13 +40,13 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | HTTP | `error.code` | Когда |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | небезопасный путь (`..`, `%2f`, `%00` и т. п.) или query |
-| 401 | `UNAUTHORIZED` | `POST /auth/logout`, `GET /user/profile`: токен отсутствует, недействителен (подпись, срок, формат), отозван или выдан удалённому пользователю; причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
+| 401 | `UNAUTHORIZED` | `POST /auth/logout`, `GET /user/profile`, `GET /recipes/profile/parameters`: токен отсутствует, недействителен (подпись, срок, формат), отозван или выдан удалённому пользователю; `POST /recipes/generate-menu`: токен передан, но недействителен (без токена 401 нет); причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
 | 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок; заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
-| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout` и `/user/profile` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
+| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout`, `/user/profile` и `/recipes/profile/parameters` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
 | 500 | `INTERNAL_ERROR` | непредвиденная ошибка gateway |
 
@@ -193,10 +194,12 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 
 ### Проверка токена, выход и профиль (SMAI-101)
 
-**Защищённые маршруты** — `POST /auth/logout` и `GET /user/profile`; в коде их
+**Защищённые маршруты** — `POST /auth/logout`, `GET /user/profile` и
+`GET /recipes/profile/parameters` (API-13); в коде их
 перечисляет `PROTECTED_ENDPOINTS` (`src/gateway/api.py`). Если у такого маршрута нет
 зависимости проверки токена или он не зарегистрирован, gateway не стартует. Остальные
-маршруты (в том числе `POST /recipes/generate-menu`) работают без токена.
+маршруты работают без токена; `POST /recipes/generate-menu` принимает токен
+необязательно (см. «Необязательный токен» ниже).
 
 **Как проверяется токен.** Заголовок `Authorization: Bearer <jwt>`: схема без учёта
 регистра, один заголовок, один токен, до 4096 символов. Затем подпись `ES256` по
@@ -228,10 +231,43 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 `POST /auth/logout` и `GET /user/profile` отвечают 503 `EXTERNAL_SERVICE_ERROR`
 (`details.upstream = "redis"`, `reason`: `connect`, `timeout` или `protocol`). Это 503,
 а не 401: пользователя не нужно «разлогинивать» из-за сбоя, запрос можно повторить.
-Гостевые маршруты (`POST /recipes/generate-menu`, `GET /dictionaries`) работают;
+Гостевые маршруты (`POST /recipes/generate-menu` — в том числе с токеном, как гость,
+`GET /dictionaries`) работают;
 gateway стартует и при мёртвом Redis, соединение открывается при первой проверке.
 `/health` Redis не проверяет, иначе его падение остановило бы и гостевые маршруты у
 оркестратора. Ретраев нет, таймауты `REDIS_*_TIMEOUT_SECONDS` по секунде.
+
+### Сохранённые параметры и необязательный токен (SMAI-102)
+
+**`GET /recipes/profile/parameters` (API-13).** Токен обязателен (401 без него, 503
+при недоступном Redis). Gateway ставит в MS-4 `X-User-Id` из токена и проксирует
+`GET /profile/parameters`; ответ 200 `{"habits","diet","allergies","kitchenTools"}` —
+параметры последней готовой генерации пользователя, при её отсутствии пустые списки и
+`diet: null` (404 нет). В `/docs` маршрут с обязательным `bearerAuth` и ответами 200,
+401, 500, 502, 503, 504.
+
+**Необязательный токен на `POST /recipes/generate-menu` (API-1).** Маршрут перечислен в
+`OPTIONAL_AUTH_ENDPOINTS` (`src/gateway/api.py`); без зависимости `optional_user`
+gateway не стартует, иначе все пользователи тихо стали бы гостями.
+Без заголовка `Authorization` запрос гостевой: в MS-4 нет `X-User-Id`, параметры не
+сохраняются. С действительным токеном `X-User-Id` берётся из токена. Недействительный
+токен (подпись, срок, формат, отзыв) даёт 401, а не гостя; единственное исключение —
+сбой Redis (ниже). Токен проверяется раньше
+лимита запросов. В `/docs` `security: [{}, {bearerAuth: []}]`, ответ 401.
+Клиентский `X-User-Id` срезается на всех маршрутах, `Authorization` в сервисы не уходит.
+
+**Redis недоступен для API-1.** Если запрос пришёл с токеном, но отзыв проверить
+нельзя (локального кэша отзывов нет), запрос обрабатывается как гостевой, в том числе
+с **отозванным** токеном: отзыв в этот момент не проверяется, 401 нет. Ответ 202, `X-User-Id` в MS-4 не
+передаётся, параметры не сохраняются. Прав это не добавляет. В логе предупреждение
+`token_redis_down_guest` (без токена), счётчик `gateway_token_fallback_guest_total`.
+Неверная подпись или истёкший токен по-прежнему дают 401 (Redis для них не нужен).
+Для остальных защищённых маршрутов (в том числе API-13) остаётся 503.
+
+**Выкатка (DevOps).** Env не меняются. Порядок: gateway со SMAI-101, затем MS-4 со
+SMAI-102 (миграция `0005_parameters_user_id` при старте), затем gateway со SMAI-102.
+MS-4 доверяет `X-User-Id`, поэтому его нельзя выкатывать раньше gateway, который
+срезает клиентский `X-User-Id` (SMAI-101): иначе владельца можно подделать.
 
 **Требования к Redis (DevOps).** Доступен только из сети `smai`, наружу не
 публиковать; пароль через `REDIS_URL` из секрета. Нужно сохранение на диск

@@ -682,17 +682,50 @@ def test_startup_fails_if_a_protected_route_is_not_registered(
     monkeypatch.setattr(
         api,
         "PROTECTED_ENDPOINTS",
-        api.PROTECTED_ENDPOINTS | {("GET", "/recipes/profile/parameters")},
+        api.PROTECTED_ENDPOINTS | {("GET", "/recipes/no-such-route")},
     )
     with pytest.raises(api.ContractError, match="not routed"):
         build(user, fake_redis)
 
 
-def test_protected_endpoints_are_logout_and_profile() -> None:
+def test_protected_endpoints_are_logout_profile_and_saved_parameters() -> None:
     assert api.PROTECTED_ENDPOINTS == {
         ("POST", "/auth/logout"),
         ("GET", "/user/profile"),
+        ("GET", "/recipes/profile/parameters"),
     }
+
+
+def test_optional_auth_endpoints_are_generate_menu_only() -> None:
+    assert api.OPTIONAL_AUTH_ENDPOINTS == {("POST", "/recipes/generate-menu")}
+
+
+def test_startup_fails_if_generate_menu_has_no_optional_token_check(
+    user, fake_redis, monkeypatch
+) -> None:
+    # Без зависимости все пользователи тихо стали бы гостями.
+    original = api._dependencies
+
+    def without_token(endpoint):
+        if (endpoint.method, endpoint.gateway_path) in api.OPTIONAL_AUTH_ENDPOINTS:
+            return [Depends(api.edge_guard)]
+        return original(endpoint)
+
+    monkeypatch.setattr(api, "_dependencies", without_token)
+    with pytest.raises(api.ContractError, match="no optional token check"):
+        build(user, fake_redis)
+
+
+def test_startup_fails_if_an_optional_route_is_not_registered(
+    user, fake_redis, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "OPTIONAL_AUTH_ENDPOINTS",
+        api.OPTIONAL_AUTH_ENDPOINTS | {("POST", "/recipes/no-such-route")},
+    )
+    with pytest.raises(api.ContractError, match="not routed"):
+        build(user, fake_redis)
 
 
 def test_only_protected_routes_have_a_token_dependency(app: FastAPI) -> None:
@@ -827,7 +860,8 @@ async def test_authorization_and_user_id_are_not_forwarded_to_other_services(
     await gateway.post("/recipes/generate-menu", json={}, headers=headers)
     sent = user.requests[0].headers
     assert "authorization" not in sent
-    assert "x-user-id" not in sent
+    # Владелец только из токена (42), клиентское значение (1) заменено.
+    assert sent.get_list("x-user-id") == ["42"]
 
 
 async def test_deleted_user_is_counted_as_a_rejected_token(gateway, app, user) -> None:

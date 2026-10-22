@@ -110,6 +110,12 @@ class AuthMetrics:
             ["result"],
             registry=registry,
         )
+        self.fallback_guest = Counter(
+            "gateway_token_fallback_guest_total",
+            "Запросы с токеном на необязательном маршруте, обработанные как гостевые "
+            "из-за недоступного Redis.",
+            registry=registry,
+        )
         # Серии есть с первого скрапа: rate() и алерты не работают с пустой серией.
         for reason in TOKEN_REJECT_REASONS:
             self.rejected.labels(reason)

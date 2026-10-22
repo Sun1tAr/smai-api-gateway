@@ -11,7 +11,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 
 from gateway.auth import AUTH_ROUTE, authenticate
-from gateway.bearer import require_user
+from gateway.bearer import optional_user, require_user
 from gateway.errors import (
     ErrorResponse,
     InvalidRequestPath,
@@ -52,7 +52,17 @@ _NOT_REACHED = (
 _PARAM = re.compile(r"\{[a-z][a-z0-9_]*\}")
 # Маршруты с обязательным токеном. Новый защищённый маршрут (SMAI-102: API-13)
 # добавляется сюда: сервис не стартует, если у него нет зависимости проверки.
-PROTECTED_ENDPOINTS = frozenset({LOGOUT_KEY, ("GET", PROFILE_ENDPOINT.gateway_path)})
+PROTECTED_ENDPOINTS = frozenset(
+    {
+        LOGOUT_KEY,
+        ("GET", PROFILE_ENDPOINT.gateway_path),
+        ("GET", "/recipes/profile/parameters"),
+    }
+)
+# Маршруты с необязательным токеном (API-1): без токена гость, с токеном владелец
+# уходит в MS-4. Без зависимости optional_user все стали бы гостями, поэтому
+# check_protected_routes требует её при старте.
+OPTIONAL_AUTH_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu")})
 # Путь в сервис задан кодом, а не запросом клиента: 400 за небезопасный путь невозможен.
 _FIXED_PATH = (*AUTH_ROUTE.endpoints, PROFILE_ENDPOINT)
 
@@ -368,8 +378,13 @@ async def edge_guard(request: Request) -> None:
 
 # Токен проверяется раньше лимитера: подпись дешёвая, а лимит на неё не нужен.
 def _dependencies(endpoint: Endpoint) -> list[Any]:
-    protected = (endpoint.method, endpoint.gateway_path) in PROTECTED_ENDPOINTS
-    return [*([Depends(require_user)] if protected else []), Depends(edge_guard)]
+    key = (endpoint.method, endpoint.gateway_path)
+    guard: list[Any] = []
+    if key in PROTECTED_ENDPOINTS:
+        guard = [Depends(require_user)]
+    elif key in OPTIONAL_AUTH_ENDPOINTS:
+        guard = [Depends(optional_user)]
+    return [*guard, Depends(edge_guard)]
 
 
 def _register(
@@ -411,6 +426,10 @@ def _register(
             request_id=request.state.request_id,
             client_ip=request_client(request).ip,
             scheme=request.url.scheme,
+            # Только из проверенного токена; у гостя и на публичных маршрутах нет.
+            user_id=user.user_id
+            if (user := getattr(request.state, "user", None))
+            else None,
         )
         upstream = await client.forward(
             upstream=endpoint.upstream,
@@ -454,7 +473,7 @@ def register_routes(
 
 
 def check_protected_routes(app: FastAPI) -> None:
-    """Защищённый маршрут без проверки токена или без регистрации не стартует."""
+    """Маршрут с токеном без проверки или без регистрации не стартует."""
     checked: set[tuple[str, str]] = set()
     for route in app.routes:
         if not isinstance(route, APIRoute):
@@ -469,9 +488,15 @@ def check_protected_routes(app: FastAPI) -> None:
                 if not guarded:
                     raise ContractError(f"{key} has no token check")
                 checked.add(key)
-    missing = PROTECTED_ENDPOINTS - checked
+            if key in OPTIONAL_AUTH_ENDPOINTS:
+                if not any(
+                    dep.call is optional_user for dep in route.dependant.dependencies
+                ):
+                    raise ContractError(f"{key} has no optional token check")
+                checked.add(key)
+    missing = (PROTECTED_ENDPOINTS | OPTIONAL_AUTH_ENDPOINTS) - checked
     if missing:
-        raise ContractError(f"protected endpoints are not routed: {sorted(missing)}")
+        raise ContractError(f"token endpoints are not routed: {sorted(missing)}")
 
 
 # 400 из контракта (валидация MS-4) и 400 самого gateway живут рядом как два примера.
@@ -515,6 +540,12 @@ def install_openapi(
                         target["responses"][status]["content"] = content
                     if "requestBody" in source:
                         target["requestBody"] = copy.deepcopy(source["requestBody"])
+                    # Токен необязателен: пустой вариант security означает «можно без».
+                    if (
+                        endpoint.method,
+                        endpoint.gateway_path,
+                    ) in OPTIONAL_AUTH_ENDPOINTS:
+                        target["security"] = [{}, {"bearerAuth": []}]
             schema["paths"]["/metrics"] = metrics_path_item()
             app.openapi_schema = schema
         return app.openapi_schema
