@@ -236,7 +236,8 @@ def test_contract_examples_are_valid_against_their_schema(
     where: str, schema_: dict, value: object
 ) -> None:
     jsonschema.Draft202012Validator(
-        {**schema_, "components": CONTRACT.get("components", {})}
+        {**schema_, "components": CONTRACT.get("components", {})},
+        format_checker=jsonschema.FormatChecker(),
     ).validate(value)
 
 
@@ -262,3 +263,14 @@ def test_contract_with_ref_is_rejected(tmp_path: Path) -> None:
     file.write_text(json.dumps(contract), "utf-8")
     with pytest.raises(ContractError, match=r"\$ref"):
         load_contracts(file)
+
+
+def test_api2_recipe_id_is_required_uuid(schema: dict) -> None:
+    media = schema["paths"]["/recipes/generate-menu/{task_id}"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]
+    menu = media["schema"]["properties"]["menu"]
+    recipe = menu["properties"]["recipes"]["items"]
+    assert "recipeId" in recipe["required"]
+    assert recipe["properties"]["recipeId"]["type"] == "string"
+    assert recipe["properties"]["recipeId"]["format"] == "uuid"

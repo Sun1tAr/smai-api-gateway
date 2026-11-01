@@ -1,3 +1,5 @@
+from uuid import UUID
+
 import pytest
 
 from tests.integration.conftest import free_port
@@ -32,7 +34,16 @@ async def test_api2_and_upstream_error_formats_pass_through(
         invalid = await gateway.post("/recipes/generate-menu", json={"peopleCount": 0})
         broken = await gateway.get("/recipes/generate-menu/crash")
     assert done.json()["status"] == "done"
-    assert len(done.json()["menu"]["recipes"]) == 3
+    recipes = done.json()["menu"]["recipes"]
+    assert len(recipes) == 3
+    assert {recipe["name"]: recipe["recipeId"] for recipe in recipes} == {
+        "Рецепт 0": "00000000-0000-4000-8000-000000000001",
+        "Рецепт 1": "00000000-0000-4000-8000-000000000002",
+        "Рецепт 2": "00000000-0000-4000-8000-000000000003",
+    }
+    assert all(
+        str(UUID(recipe["recipeId"])) == recipe["recipeId"] for recipe in recipes
+    )
     assert pending.json() == {"status": "pending", "menu": None, "error": None}
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "NOT_FOUND"

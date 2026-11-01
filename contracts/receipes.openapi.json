@@ -243,6 +243,7 @@
                           "items": {
                             "type": "object",
                             "required": [
+                              "recipeId",
                               "name",
                               "ingredients",
                               "calories",
@@ -251,6 +252,11 @@
                               "instructions"
                             ],
                             "properties": {
+                              "recipeId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "description": "Идентификатор сохранённого рецепта."
+                              },
                               "name": {
                                 "type": "string"
                               },
@@ -391,7 +397,8 @@
                               "Добавить овсяные хлопья и варить 5 минут.",
                               "Добавить ягоды и подать."
                             ],
-                            "photo": "https://example.com/photos/oatmeal.jpg"
+                            "photo": "https://example.com/photos/oatmeal.jpg",
+                            "recipeId": "00000000-0000-4000-8000-000000000001"
                           },
                           {
                             "name": "Куриная грудка с гречкой",
@@ -425,7 +432,8 @@
                               "Нарезать и обжарить куриную грудку с луком.",
                               "Подать курицу с гречкой."
                             ],
-                            "photo": "https://example.com/photos/chicken-buckwheat.jpg"
+                            "photo": "https://example.com/photos/chicken-buckwheat.jpg",
+                            "recipeId": "00000000-0000-4000-8000-000000000002"
                           },
                           {
                             "name": "Овощной суп с чечевицей",
@@ -459,7 +467,8 @@
                               "Варить чечевицу с овощами 25 минут.",
                               "Посолить и подать."
                             ],
-                            "photo": null
+                            "photo": null,
+                            "recipeId": "00000000-0000-4000-8000-000000000003"
                           }
                         ]
                       },

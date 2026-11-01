@@ -16,7 +16,7 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | Метод и путь на gateway | Куда уходит в MS-4 | Успех | Контракт |
 | --- | --- | --- | --- |
 | `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}`; токен необязателен (SMAI-102) | API-1 (SMAI-A-121) |
-| `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}` | API-2 (SMAI-A-127) |
+| `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}`; каждый рецепт содержит `recipeId` (UUID MS-4), передаётся без изменений | API-2 (SMAI-A-127) |
 | `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |

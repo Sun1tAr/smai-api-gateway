@@ -19,6 +19,7 @@ RESULT = {
     "menu": {
         "recipes": [
             {
+                "recipeId": f"00000000-0000-4000-8000-{index + 1:012d}",
                 "name": f"Рецепт {index}",
                 "ingredients": [{"name": "Вода", "quantity": 1, "unit": "л"}],
                 "calories": 100,
