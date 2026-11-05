@@ -16,6 +16,7 @@ OPERATIONS = [
     ("/recipes/generate-menu", "post", "/generate-menu"),
     ("/recipes/generate-menu/{task_id}", "get", "/generate-menu/{task_id}"),
     ("/recipes/profile/parameters", "get", "/profile/parameters"),
+    ("/recipes/cart", "post", "/recipes/cart"),
 ]
 GATEWAY_CODES = {
     ("post", "/recipes/generate-menu"): {
@@ -43,6 +44,18 @@ GATEWAY_CODES = {
         "200",
         "400",
         "401",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    ("post", "/recipes/cart"): {
+        "200",
+        "400",
+        "401",
+        "404",
+        "413",
+        "429",
         "500",
         "502",
         "503",
@@ -274,3 +287,14 @@ def test_api2_recipe_id_is_required_uuid(schema: dict) -> None:
     assert "recipeId" in recipe["required"]
     assert recipe["properties"]["recipeId"]["type"] == "string"
     assert recipe["properties"]["recipeId"]["format"] == "uuid"
+
+
+def test_api14_documents_optional_auth_and_its_own_limit(schema: dict) -> None:
+    operation = schema["paths"]["/recipes/cart"]["post"]
+    assert operation["security"] == [{}, {"bearerAuth": []}]
+    responses = operation["responses"]
+    assert responses["401"]["headers"]["WWW-Authenticate"]["schema"]["type"] == "string"
+    limit = responses["429"]
+    assert limit["headers"]["Retry-After"]["schema"]["type"] == "integer"
+    assert "CART_RATE_LIMIT_REQUESTS" in limit["description"]
+    assert "CART_RATE_LIMIT_GLOBAL_REQUESTS" in limit["description"]

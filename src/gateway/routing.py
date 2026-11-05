@@ -9,6 +9,7 @@ RESERVED_PREFIXES = frozenset(
     {"health", "metrics", "docs", "redoc", "openapi.json", "auth", "user"}
 )
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
+CART_ENDPOINT = ("POST", "/recipes/cart")
 
 _PREFIX = re.compile(r"[a-z][a-z0-9-]*")
 _LITERAL = re.compile(r"[A-Za-z0-9._~-]+")
@@ -31,13 +32,13 @@ class Endpoint:
     prefix: str
     upstream: str
     upstream_path: str
+    # Шаблон без префикса gateway, если пути различаются.
+    public_path: str | None = None
 
     @property
     def gateway_path(self) -> str:
-        # Пустой prefix: сервис публикуется под своим же путём, без добавки.
-        return (
-            f"/{self.prefix}{self.upstream_path}" if self.prefix else self.upstream_path
-        )
+        path = self.upstream_path if self.public_path is None else self.public_path
+        return f"/{self.prefix}{path}" if self.prefix else path
 
 
 @dataclass(frozen=True)
@@ -47,18 +48,38 @@ class Route:
     endpoints: tuple[Endpoint, ...]
 
 
-def _parse_endpoint(prefix: str, upstream: str, entry: object) -> Endpoint:
-    if not isinstance(entry, str):
-        raise RouteConfigError(f"allow entries must be strings: {entry!r}")
-    method, _, path = entry.partition(" ")
-    if method not in METHODS or not path.startswith("/") or path.endswith("/"):
-        raise RouteConfigError(f"invalid allow entry: {entry!r}")
+def _path_parameters(path: object) -> list[str]:
+    if not isinstance(path, str) or not path.startswith("/") or path.endswith("/"):
+        raise RouteConfigError(f"invalid path template: {path!r}")
+    parameters = []
     for segment in path[1:].split("/"):
-        if segment in (".", "..") or not (
-            _LITERAL.fullmatch(segment) or _PARAM.fullmatch(segment)
-        ):
-            raise RouteConfigError(f"invalid path segment in {entry!r}")
-    return Endpoint(method=method, prefix=prefix, upstream=upstream, upstream_path=path)
+        if _PARAM.fullmatch(segment):
+            parameters.append(segment)
+        elif segment in (".", "..") or not _LITERAL.fullmatch(segment):
+            raise RouteConfigError(f"invalid path segment in {path!r}")
+    return parameters
+
+
+def _parse_endpoint(prefix: str, upstream: str, entry: object) -> Endpoint:
+    mapped = isinstance(entry, dict) and entry.keys() == {"endpoint", "upstream_path"}
+    declaration = entry["endpoint"] if mapped else entry
+    if not isinstance(declaration, str):
+        raise RouteConfigError(f"invalid allow entry: {entry!r}")
+    method, _, path = declaration.partition(" ")
+    if method not in METHODS:
+        raise RouteConfigError(f"invalid allow method: {method!r}")
+    parameters = _path_parameters(path)
+    if not mapped:
+        return Endpoint(method, prefix, upstream, path)
+    target = entry["upstream_path"]
+    target_parameters = _path_parameters(target)
+    if sorted(parameters) != sorted(target_parameters) or len(set(parameters)) != len(
+        parameters
+    ):
+        raise RouteConfigError(
+            f"mapped paths must use the same unique parameters: {entry!r}"
+        )
+    return Endpoint(method, prefix, upstream, target, public_path=path)
 
 
 # Белый список читается один раз при старте: любая ошибка конфигурации фатальна.
@@ -143,17 +164,16 @@ def upstream_target(endpoint: Endpoint, raw_path: bytes, query: bytes = b"") -> 
     gateway = endpoint.gateway_path[1:].split("/")
     if len(actual) != len(gateway):
         raise InvalidPath("path does not match the endpoint")
-    parts: list[str] = []
+    parameters: dict[str, str] = {}
     for given, expected in zip(actual, gateway, strict=True):
         if _PARAM.fullmatch(expected):
             _check_param_segment(given)
+            parameters[expected] = given
         elif given != expected:
             raise InvalidPath("path does not match the endpoint")
-        parts.append(given)
-    # Первый сегмент — префикс gateway; его в сервис не передаём.
-    if endpoint.prefix:
-        parts = parts[1:]
     if any(byte < 0x21 or byte > 0x7E for byte in query):
         raise InvalidPath("invalid characters in query")
-    target = b"/" + "/".join(parts).encode("ascii")
+    target = "/".join(
+        parameters.get(part, part) for part in endpoint.upstream_path.split("/")
+    ).encode("ascii")
     return target + (b"?" + query if query else b"")

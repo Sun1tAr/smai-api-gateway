@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     upstream_write_timeout_seconds: float = Field(default=5, gt=0, le=60)
     upstream_pool_timeout_seconds: float = Field(default=2, gt=0, le=60)
     upstream_total_timeout_seconds: float = Field(default=12, gt=0, le=180)
+    upstream_cart_timeout_seconds: float = Field(default=40, gt=0, le=120)
     upstream_max_connections: int = Field(default=100, ge=1, le=1000)
     upstream_keepalive_expiry_seconds: float = Field(default=2, gt=0, le=60)
     upstream_max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
@@ -45,6 +46,9 @@ class Settings(BaseSettings):
     auth_rate_limit_enabled: bool = True
     auth_rate_limit_requests: int = Field(default=10, ge=1, le=10_000)
     auth_rate_limit_global_requests: int = Field(default=60, ge=1, le=100_000)
+    cart_rate_limit_enabled: bool = True
+    cart_rate_limit_requests: int = Field(default=1, ge=1, le=10_000)
+    cart_rate_limit_global_requests: int = Field(default=3, ge=1, le=100_000)
     rate_limit_ipv6_prefix: int = Field(default=56, ge=48, le=64)
     # Явный выбор «ключ — адрес сокета» для запуска без доверенных прокси.
     rate_limit_key_by_socket: bool = False
@@ -93,12 +97,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def rate_limit_is_safe_to_start(self) -> "Settings":
         if (
-            max(self.rate_limit_requests, self.auth_rate_limit_requests)
+            max(
+                self.rate_limit_requests,
+                self.auth_rate_limit_requests,
+                self.cart_rate_limit_requests,
+            )
             * self.rate_limit_max_keys
             > 10_000_000
         ):
             raise ValueError(
-                "(AUTH_)RATE_LIMIT_REQUESTS * RATE_LIMIT_MAX_KEYS is too large"
+                "(AUTH_/CART_)RATE_LIMIT_REQUESTS * RATE_LIMIT_MAX_KEYS is too large"
             )
         # За обратным прокси без TRUSTED_PROXIES все клиенты окажутся в одном бакете.
         if (

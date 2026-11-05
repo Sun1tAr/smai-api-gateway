@@ -18,6 +18,7 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}`; токен необязателен (SMAI-102) | API-1 (SMAI-A-121) |
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}`; каждый рецепт содержит `recipeId` (UUID MS-4), передаётся без изменений | API-2 (SMAI-A-127) |
 | `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
+| `POST /recipes/cart` | `POST /recipes/cart` | 200 `{"matches","total","allMatched","unmatchedCount"}` для сохранённого негостевого рецепта, токен необязателен | API-14 (SMAI-A-351) |
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |
 | `POST /auth/login` | `POST /login` (MS-3) | 200 `{"userId","token"}` | API-9 (SMAI-A-261) |
@@ -40,19 +41,19 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | HTTP | `error.code` | Когда |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | небезопасный путь (`..`, `%2f`, `%00` и т. п.) или query |
-| 401 | `UNAUTHORIZED` | `POST /auth/logout`, `GET /user/profile`, `GET /recipes/profile/parameters`: токен отсутствует, недействителен (подпись, срок, формат), отозван или выдан удалённому пользователю; `POST /recipes/generate-menu`: токен передан, но недействителен (без токена 401 нет); причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
+| 401 | `UNAUTHORIZED` | `POST /auth/logout`, `GET /user/profile`, `GET /recipes/profile/parameters`: токен отсутствует, недействителен (подпись, срок, формат), отозван или выдан удалённому пользователю. `POST /recipes/generate-menu`, `POST /recipes/cart`: передан недействительный токен. Причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
-| 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок; заголовок `Retry-After`, `details.retry_after_seconds` |
+| 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /recipes/cart`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок. Заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
 | 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout`, `/user/profile` и `/recipes/profile/parameters` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
 | 500 | `INTERNAL_ERROR` | непредвиденная ошибка gateway |
 
 `details` ошибок 502–504: `{"upstream": "recipes", "reason": "connect|protocol|timeout|pool|response_too_large"}`.
-Ответы 503 самого MS-4 (например, переполненная очередь) проходят как есть и
-отличаются кодом ошибки. Если API-1 вернул 504, не повторяйте запрос
+Ответы 503 самого MS-4 (например, переполненная очередь или недоступный каталог
+ВкусВилла) проходят как есть. Если API-1 вернул 504, не повторяйте запрос
 автоматически: задача могла быть создана.
 
 ## Локальный запуск
@@ -99,11 +100,12 @@ Compose поднимает и локальный Redis (сервис `redis`, т
 | `UPSTREAM_WRITE_TIMEOUT_SECONDS` | Отправка запроса | `5` |
 | `UPSTREAM_POOL_TIMEOUT_SECONDS` | Ожидание свободного соединения из пула | `2` |
 | `UPSTREAM_TOTAL_TIMEOUT_SECONDS` | Общий дедлайн запроса к MS-4 и MS-2 | `12` |
+| `UPSTREAM_CART_TIMEOUT_SECONDS` | Общий дедлайн и ожидание данных для `POST /recipes/cart`, секунды (больше 0, до 120 включительно) | `40` |
 | `UPSTREAM_MAX_CONNECTIONS` | Размер пула | `100` |
 | `UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | Простой keep-alive; меньше таймаута серверов MS-4 и MS-2 | `2` |
 | `UPSTREAM_MAX_RESPONSE_BYTES` | Предел ответа MS-4 и MS-2 | `2097152` |
 | `MAX_REQUEST_BODY_BYTES` | Предел тела запроса клиента | `65536` |
-| `RATE_LIMIT_ENABLED` | Включает лимит на `POST /recipes/generate-menu` (`false` — отключён, схема `/docs` не меняется) | `true` |
+| `RATE_LIMIT_ENABLED` | Общий переключатель лимитов генерации, корзины и аутентификации | `true` |
 | `RATE_LIMIT_GLOBAL_REQUESTS` | Общий потолок на всех клиентов за окно | `100` |
 | `RATE_LIMIT_IPV6_PREFIX` | Длина префикса IPv6 в ключе (48–64) | `56` |
 | `RATE_LIMIT_KEY_BY_SOCKET` | Явный выбор «ключ — адрес сокета», если `TRUSTED_PROXIES` пуст | `false` |
@@ -122,6 +124,9 @@ Compose поднимает и локальный Redis (сервис `redis`, т
 | `AUTH_RATE_LIMIT_ENABLED` | Включает лимит на `/auth/*` (работает только при `RATE_LIMIT_ENABLED=true`) | `true` |
 | `AUTH_RATE_LIMIT_REQUESTS` | Сколько запросов `/auth/*` с одного адреса за окно (общий счётчик на оба маршрута) | `10` |
 | `AUTH_RATE_LIMIT_GLOBAL_REQUESTS` | Общий потолок `/auth/*` на всех клиентов за окно | `60` |
+| `CART_RATE_LIMIT_ENABLED` | Включает отдельный лимит `POST /recipes/cart` при `RATE_LIMIT_ENABLED=true` | `true` |
+| `CART_RATE_LIMIT_REQUESTS` | Лимит корзины с одного адреса за окно (1–10 000, с общим ограничением `RATE_LIMIT_MAX_KEYS`) | `1` |
+| `CART_RATE_LIMIT_GLOBAL_REQUESTS` | Лимит корзины от всех клиентов на процесс за окно (1–100 000) | `3` |
 | `REDIS_URL` | Redis с отозванными токенами: `redis://[:password@]host:port/db` или `rediss://`; пароль только через URL из секрета, значение не логируется | обязательна |
 | `REDIS_CONNECT_TIMEOUT_SECONDS` | Установка соединения с Redis (0–30) | `1` |
 | `REDIS_OPERATION_TIMEOUT_SECONDS` | Ожидание ответа Redis на команду (0–30) | `1` |
@@ -263,6 +268,18 @@ gateway не стартует, иначе все пользователи тих
 `token_redis_down_guest` (без токена), счётчик `gateway_token_fallback_guest_total`.
 Неверная подпись или истёкший токен по-прежнему дают 401 (Redis для них не нужен).
 Для остальных защищённых маршрутов (в том числе API-13) остаётся 503.
+
+### Корзина рецепта (SMAI-118)
+
+`POST /recipes/cart` с телом `{"recipeId":"<UUID>"}` проксируется в MS-4 по тому
+же пути. JWT проверяется по правилам API-1. MS-4 ищет рецепт по UUID среди
+негостевых рецептов. Корзина возвращается и при частичном подборе товаров, а если
+каталог недоступен, MS-4 может вернуть 503 `EXTERNAL_SERVICE_ERROR`.
+
+Ожидание данных и общий дедлайн прокси задаёт `UPSTREAM_CART_TIMEOUT_SECONDS`.
+Лимит корзины использует то же скользящее окно и ключ клиента, что и генерация.
+По умолчанию допускается 1 запрос с клиента и 3 на процесс gateway за 60 секунд.
+Это ограничение входящих запросов. Число обращений в каталог зависит от рецепта.
 
 **Выкатка (DevOps).** Env не меняются. Порядок: gateway со SMAI-101, затем MS-4 со
 SMAI-102 (миграция `0005_parameters_user_id` при старте), затем gateway со SMAI-102.

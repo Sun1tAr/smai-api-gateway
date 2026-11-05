@@ -150,6 +150,36 @@ async def test_total_deadline_gives_504() -> None:
         await forward(client)
 
 
+async def test_cart_uses_40_seconds_read_budget_without_changing_other_routes() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return reply(200, str(request.extensions["timeout"]["read"]).encode())
+
+    upstream = make_client(handler)
+    try:
+        cart = await forward(upstream, method="POST", route="/recipes/cart")
+        other = await forward(upstream)
+    finally:
+        await upstream.aclose()
+    assert float(cart.body) == 40
+    assert float(other.body) == 10
+
+
+async def test_cart_uses_its_own_total_deadline() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.15)
+        return reply()
+
+    upstream = make_client(
+        handler, upstream_total_timeout_seconds=1, upstream_cart_timeout_seconds=0.05
+    )
+    try:
+        with pytest.raises(UpstreamTimeout):
+            await forward(upstream, method="POST", route="/recipes/cart")
+        assert (await forward(upstream)).status_code == 200
+    finally:
+        await upstream.aclose()
+
+
 async def test_response_over_the_limit_is_rejected_by_header() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return reply(200, b"x" * 2048, headers={"content-length": "2048"})

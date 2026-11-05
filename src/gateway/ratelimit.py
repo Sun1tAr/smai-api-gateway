@@ -8,6 +8,8 @@ from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from gateway.routing import CART_ENDPOINT
+
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
@@ -17,6 +19,7 @@ LIMITED_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu")})
 AUTH_LIMITED_ENDPOINTS = frozenset(
     {("POST", "/auth/register"), ("POST", "/auth/login")}
 )
+RATE_LIMITED_ENDPOINTS = LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS | {CART_ENDPOINT}
 UNKNOWN_CLIENT = "unknown"
 GLOBAL_KEY = "*"
 # Доверять можно узкой группе прокси: короткий префикс почти наверняка опечатка.
