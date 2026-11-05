@@ -19,6 +19,7 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}`; каждый рецепт содержит `recipeId` (UUID MS-4), передаётся без изменений | API-2 (SMAI-A-127) |
 | `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
 | `POST /recipes/cart` | `POST /recipes/cart` | 200 `{"matches","total","allMatched","unmatchedCount"}` для сохранённого негостевого рецепта, токен необязателен | API-14 (SMAI-A-351) |
+| `POST /recipes/cart/link` | `POST /recipes/cart/link` | 200 `{"link":"<HTTPS URL ВкусВилла>"}`, без аутентификации | API-16 (SMAI-A-355) |
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |
 | `POST /auth/login` | `POST /login` (MS-3) | 200 `{"userId","token"}` | API-9 (SMAI-A-261) |
@@ -45,7 +46,7 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
-| 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /recipes/cart`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок. Заголовок `Retry-After`, `details.retry_after_seconds` |
+| 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /recipes/cart`, `POST /recipes/cart/link`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок. Заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
 | 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout`, `/user/profile` и `/recipes/profile/parameters` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
@@ -124,9 +125,9 @@ Compose поднимает и локальный Redis (сервис `redis`, т
 | `AUTH_RATE_LIMIT_ENABLED` | Включает лимит на `/auth/*` (работает только при `RATE_LIMIT_ENABLED=true`) | `true` |
 | `AUTH_RATE_LIMIT_REQUESTS` | Сколько запросов `/auth/*` с одного адреса за окно (общий счётчик на оба маршрута) | `10` |
 | `AUTH_RATE_LIMIT_GLOBAL_REQUESTS` | Общий потолок `/auth/*` на всех клиентов за окно | `60` |
-| `CART_RATE_LIMIT_ENABLED` | Включает отдельный лимит `POST /recipes/cart` при `RATE_LIMIT_ENABLED=true` | `true` |
-| `CART_RATE_LIMIT_REQUESTS` | Лимит корзины с одного адреса за окно (1–10 000, с общим ограничением `RATE_LIMIT_MAX_KEYS`) | `1` |
-| `CART_RATE_LIMIT_GLOBAL_REQUESTS` | Лимит корзины от всех клиентов на процесс за окно (1–100 000) | `3` |
+| `CART_RATE_LIMIT_ENABLED` | Включает лимиты API-14 и API-16 при `RATE_LIMIT_ENABLED=true` | `true` |
+| `CART_RATE_LIMIT_REQUESTS` | Лимит с одного адреса за окно на каждом маршруте корзины (1–10 000, с ограничением `RATE_LIMIT_MAX_KEYS`) | `1` |
+| `CART_RATE_LIMIT_GLOBAL_REQUESTS` | Общий лимит API-14 и API-16 от всех клиентов на процесс за окно (1–100 000) | `3` |
 | `REDIS_URL` | Redis с отозванными токенами: `redis://[:password@]host:port/db` или `rediss://`; пароль только через URL из секрета, значение не логируется | обязательна |
 | `REDIS_CONNECT_TIMEOUT_SECONDS` | Установка соединения с Redis (0–30) | `1` |
 | `REDIS_OPERATION_TIMEOUT_SECONDS` | Ожидание ответа Redis на команду (0–30) | `1` |
@@ -278,8 +279,21 @@ gateway не стартует, иначе все пользователи тих
 
 Ожидание данных и общий дедлайн прокси задаёт `UPSTREAM_CART_TIMEOUT_SECONDS`.
 Лимит корзины использует то же скользящее окно и ключ клиента, что и генерация.
-По умолчанию допускается 1 запрос с клиента и 3 на процесс gateway за 60 секунд.
-Это ограничение входящих запросов. Число обращений в каталог зависит от рецепта.
+По умолчанию за 60 секунд клиент может сделать по одному запросу на API-14 и
+API-16, а процесс gateway принимает до трёх запросов суммарно на оба маршрута.
+
+### Ссылка на корзину (SMAI-119)
+
+`POST /recipes/cart/link` проксируется в MS-4 по тому же пути. Передай от 1 до
+20 позиций с `product.id` и `q` из API-14. Например,
+`{"items":[{"id":12345,"q":1},{"id":67890,"q":0.25}]}`. Диапазон целого `id`
+от 1 до 999999999. Диапазон числового `q` от 0.01 до 40 включительно.
+Ответ 200 содержит одну ссылку в поле `link`.
+
+Gateway игнорирует `Authorization` и `X-User-Id` для этого маршрута. Стандартные
+таймауты прокси составляют 10 секунд на ожидание данных и 12 секунд на весь
+запрос. MS-4 возвращает 400 при ошибке запроса или отклонении позиций,
+503 при сбое ВкусВилла и 500 при внутренней ошибке.
 
 **Выкатка (DevOps).** Env не меняются. Порядок: gateway со SMAI-101, затем MS-4 со
 SMAI-102 (миграция `0005_parameters_user_id` при старте), затем gateway со SMAI-102.
@@ -344,7 +358,8 @@ MS-4 доверяет `X-User-Id`, поэтому его нельзя выкат
 Лимит защищает дорогую LLM-генерацию: `POST /recipes/generate-menu` принимает не
 более `RATE_LIMIT_REQUESTS` запросов за `RATE_LIMIT_WINDOW_SECONDS` (10 за 60 с) с
 одного клиента и не более `RATE_LIMIT_GLOBAL_REQUESTS` (100) за то же окно от всех
-вместе. Остальные операции (в том числе опрос `GET .../{task_id}`) не ограничены.
+вместе. Отдельные лимиты действуют для корзины и аутентификации. Для опроса
+`GET .../{task_id}` лимита нет.
 Это отклонение от «без ограничений доступа» в спеках v1, поэтому лимит можно
 выключить: `RATE_LIMIT_ENABLED=false` (метрики лимита при этом остаются, серии нулевые).
 
@@ -362,8 +377,8 @@ MS-4 доверяет `X-User-Id`, поэтому его нельзя выкат
   освобождения самой старой попытки; клиент, выждавший его, проходит.
 - В лимит идут все попытки, кроме тех, что заведомо не дошли до сервиса: 400
   (небезопасный путь), 413, 502 `connect` и 503 `pool` возвращают слот. Остальные,
-  включая 504, 502 `protocol` и любые ответы MS-4, слот тратят: генерация могла
-  начаться. Отклонённые (429) в счёт не идут; если общий потолок отказал, слот
+  включая 504, 502 `protocol` и любые ответы MS-4, тратят слот, поскольку сервис
+  мог начать обработку. Отклонённые (429) в счёт не идут; если общий потолок отказал, слот
   клиента возвращается.
 - Ключ — IP клиента; IPv6 группируется по префиксу `RATE_LIMIT_IPV6_PREFIX`
   (по умолчанию /56, допустимо 48–64), потому что абоненту обычно отдают целую сеть.

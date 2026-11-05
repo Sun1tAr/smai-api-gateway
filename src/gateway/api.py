@@ -29,6 +29,7 @@ from gateway.profile import PROFILE_ENDPOINT, fetch_profile
 from gateway.proxy import UpstreamClient, read_limited_body
 from gateway.ratelimit import (
     AUTH_LIMITED_ENDPOINTS,
+    CART_LIMITED_ENDPOINTS,
     GLOBAL_KEY,
     LIMITED_ENDPOINTS,
     RATE_LIMITED_ENDPOINTS,
@@ -324,8 +325,7 @@ class _Ticket:
     global_limiter: RateLimiter
 
 
-# Лимитеры по ключу «метод + путь»: у каждой группы свой бакет клиента и свой
-# общий потолок, они не делят счётчики. None — группа без лимита.
+# API-14 и API-16 делят общий потолок, но используют разные лимитеры клиентов.
 def _limiters(
     state: Any, key: tuple[str, str]
 ) -> tuple[RateLimiter | None, RateLimiter | None] | None:
@@ -333,8 +333,8 @@ def _limiters(
         return state.rate_limiter, state.global_limiter
     if key in AUTH_LIMITED_ENDPOINTS:
         return state.auth_rate_limiter, state.auth_global_limiter
-    if key == CART_ENDPOINT:
-        return state.cart_rate_limiter, state.cart_global_limiter
+    if key in CART_LIMITED_ENDPOINTS:
+        return state.cart_rate_limiters.get(key), state.cart_global_limiter
     return None
 
 

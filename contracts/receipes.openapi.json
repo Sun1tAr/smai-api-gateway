@@ -1187,7 +1187,7 @@
             }
           },
           "429": {
-            "description": "Превышен лимит корзины: по умолчанию 1 запрос за окно с клиента (CART_RATE_LIMIT_REQUESTS) и 3 запроса на процесс gateway (CART_RATE_LIMIT_GLOBAL_REQUESTS). Окно — RATE_LIMIT_WINDOW_SECONDS (60 секунд). Лимит настраивается отдельно от генерации и аутентификации и может быть отключён. Через сколько секунд повторить запрос, указано в Retry-After и в details.retry_after_seconds. Слот возвращается, если запрос заведомо не дошёл до MS-4 (400 от gateway, 413, 502 connect, 503 pool).",
+            "description": "Превышен лимит корзины. По умолчанию клиент может отправить 1 запрос на каждый из маршрутов API-14 и API-16 за окно (CART_RATE_LIMIT_REQUESTS). Общий потолок обоих маршрутов составляет 3 запроса на процесс gateway (CART_RATE_LIMIT_GLOBAL_REQUESTS). Окно задаёт RATE_LIMIT_WINDOW_SECONDS (60 секунд). Лимит можно отключить. Через сколько секунд повторить запрос, указано в Retry-After и в details.retry_after_seconds. Слот возвращается, если запрос заведомо не дошёл до MS-4 (400 от gateway, 413, 502 connect, 503 pool).",
             "headers": {
               "Retry-After": {
                 "description": "Через сколько секунд повторить запрос.",
@@ -1320,6 +1320,314 @@
                       "error": {
                         "code": "EXTERNAL_SERVICE_ERROR",
                         "message": "VkusVill catalog unavailable",
+                        "details": {}
+                      }
+                    }
+                  },
+                  "pool": {
+                    "summary": "Пул соединений gateway исчерпан",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Gateway is overloaded, try again later",
+                        "details": {
+                          "upstream": "recipes",
+                          "reason": "pool"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/cart/link": {
+      "post": {
+        "summary": "Создать ссылку на корзину ВкусВилла (API-16)",
+        "description": "Создаёт одну ссылку на корзину ВкусВилла из переданных позиций. Для каждой позиции можно использовать product.id и q из API-14. Передавайте id как целое JSON-число, q как конечное JSON-число в единицах продажи. Ошибка любой позиции отклоняет весь запрос. Запрос не оформляет заказ. Маршрут доступен без токена. Gateway игнорирует Authorization и X-User-Id. Таймаут чтения gateway по умолчанию составляет 10 секунд, общий дедлайн — 12 секунд.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "items"
+                ],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "q"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 999999999,
+                          "description": "ID товара в каталоге ВкусВилла."
+                        },
+                        "q": {
+                          "type": "number",
+                          "minimum": 0.01,
+                          "maximum": 40,
+                          "description": "Количество в единицах продажи."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "example": {
+                "items": [
+                  {
+                    "id": 12345,
+                    "q": 1
+                  },
+                  {
+                    "id": 67890,
+                    "q": 0.25
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ссылка на корзину ВкусВилла создана.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "link"
+                  ],
+                  "properties": {
+                    "link": {
+                      "type": "string",
+                      "format": "uri",
+                      "description": "Абсолютный HTTPS URL на vkusvill.ru или www.vkusvill.ru."
+                    }
+                  }
+                },
+                "example": {
+                  "link": "https://vkusvill.ru/mobile?basket&share=2557567558"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса или ВкусВилл отклонил позиции. Ошибка относится ко всей корзине.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "ms4_validation": {
+                    "summary": "Некорректное количество",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "items",
+                                "0",
+                                "q"
+                              ],
+                              "type": "greater_than_equal"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "ms4_invalid_input": {
+                    "summary": "ВкусВилл отклонил позиции",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Превышен лимит корзины. По умолчанию клиент может отправить 1 запрос на каждый из маршрутов API-14 и API-16 за окно (CART_RATE_LIMIT_REQUESTS). Общий потолок обоих маршрутов составляет 3 запроса на процесс gateway (CART_RATE_LIMIT_GLOBAL_REQUESTS). Окно задаёт RATE_LIMIT_WINDOW_SECONDS (60 секунд). Лимит можно отключить. Через сколько секунд повторить запрос, указано в Retry-After и в details.retry_after_seconds. Слот возвращается, если запрос заведомо не дошёл до MS-4 (400 от gateway, 413, 502 connect, 503 pool).",
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests, try again later",
+                    "details": {
+                      "retry_after_seconds": 60
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка при создании ссылки на корзину.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ВкусВилл не смог вернуть ссылку на корзину или исчерпан пул соединений gateway с MS-4 (details.reason = pool).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "link": {
+                    "summary": "Ссылка на корзину ВкусВилла недоступна",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "VkusVill cart link unavailable",
                         "details": {}
                       }
                     }

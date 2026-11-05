@@ -95,6 +95,52 @@ async def test_cart_passes_through_upstream_errors(
     assert response.json()["error"]["code"] == code
 
 
+async def test_cart_link_uses_cart_items_and_ignores_client_auth(
+    stub_url, stub_requests, open_gateway
+) -> None:
+    async with open_gateway(stub_url) as gateway:
+        cart = await gateway.post(
+            "/recipes/cart", json={"recipeId": "00000000-0000-4000-8000-000000000001"}
+        )
+        assert cart.status_code == 200
+        match = cart.json()["matches"][0]
+        response = await gateway.post(
+            "/recipes/cart/link",
+            json={"items": [{"id": match["product"]["id"], "q": match["q"]}]},
+            headers={"Authorization": "Bearer invalid-token", "X-User-Id": "42"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"link": "https://vkusvill.ru/mobile?basket&share=test"}
+    assert len(stub_requests) == 2
+    seen = stub_requests[1]
+    assert (seen["method"], seen["target"]) == ("POST", "/recipes/cart/link")
+    assert "authorization" not in seen["headers"]
+    assert "x-user-id" not in seen["headers"]
+
+
+@pytest.mark.parametrize(
+    ("items", "status", "code", "message"),
+    [
+        ([], 400, "VALIDATION_ERROR", "Request validation failed"),
+        (
+            [{"id": 101, "q": 1}],
+            503,
+            "EXTERNAL_SERVICE_ERROR",
+            "VkusVill cart link unavailable",
+        ),
+    ],
+)
+async def test_cart_link_passes_through_upstream_errors(
+    stub_url, open_gateway, items, status, code, message
+) -> None:
+    async with open_gateway(stub_url) as gateway:
+        response = await gateway.post("/recipes/cart/link", json={"items": items})
+    assert response.status_code == status
+    assert response.json() == {
+        "error": {"code": code, "message": message, "details": {}}
+    }
+
+
 async def test_closed_port_gives_502(open_gateway) -> None:
     async with open_gateway(f"http://127.0.0.1:{free_port()}") as gateway:
         response = await gateway.get(f"/recipes/generate-menu/{TASK}")
@@ -174,6 +220,7 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         "/health",
         "/metrics",
         "/recipes/cart",
+        "/recipes/cart/link",
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
         "/recipes/profile/parameters",
