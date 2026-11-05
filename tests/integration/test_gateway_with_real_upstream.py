@@ -61,6 +61,40 @@ async def test_query_reaches_the_upstream_byte_for_byte(
     assert stub_requests[0]["target"] == f"/generate-menu/{TASK}?a=1&b=%D0%B0&c=%2F"
 
 
+async def test_cart_keeps_the_explicit_upstream_path_and_outlasts_other_timeouts(
+    stub_url, stub_requests, open_gateway
+) -> None:
+    async with open_gateway(stub_url) as gateway:
+        response = await gateway.post(
+            "/recipes/cart?slow=1&note=%2F",
+            json={"recipeId": "00000000-0000-4000-8000-000000000001"},
+            headers={"X-User-Id": "42"},
+        )
+    assert response.status_code == 200
+    assert response.json()["matches"][0]["ingredient"]["name"] == "Вода"
+    assert response.json()["allMatched"] is True
+    assert len(stub_requests) == 1
+    seen = stub_requests[0]
+    assert (seen["method"], seen["target"]) == ("POST", "/recipes/cart?slow=1&note=%2F")
+    assert "x-user-id" not in seen["headers"]
+
+
+@pytest.mark.parametrize(
+    ("recipe_id", "status", "code"),
+    [
+        ("not-a-uuid", 400, "VALIDATION_ERROR"),
+        ("00000000-0000-4000-8000-000000000099", 404, "NOT_FOUND"),
+    ],
+)
+async def test_cart_passes_through_upstream_errors(
+    stub_url, open_gateway, recipe_id, status, code
+) -> None:
+    async with open_gateway(stub_url) as gateway:
+        response = await gateway.post("/recipes/cart", json={"recipeId": recipe_id})
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
+
+
 async def test_closed_port_gives_502(open_gateway) -> None:
     async with open_gateway(f"http://127.0.0.1:{free_port()}") as gateway:
         response = await gateway.get(f"/recipes/generate-menu/{TASK}")
@@ -104,6 +138,12 @@ async def test_gzip_response_is_delivered_intact(stub_url, open_gateway) -> None
         ("POST", f"/recipes/generate-menu/{TASK}"),
         ("GET", "/recipes/generate-menu/%2e%2e"),
         ("GET", "/recipes/generate-menu/%2f..%2fmetrics"),
+        ("GET", "/recipes/cart"),
+        ("POST", "/cart"),
+        ("POST", "/recipes/recipes/cart"),
+        ("POST", "/recipes/cart/"),
+        ("POST", "/recipes/%63art"),
+        ("POST", "/recipes/cart%2F.."),
     ],
 )
 async def test_internal_paths_of_the_upstream_stay_unreachable(
@@ -133,6 +173,7 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         "/dictionaries",
         "/health",
         "/metrics",
+        "/recipes/cart",
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
         "/recipes/profile/parameters",

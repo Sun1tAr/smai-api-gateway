@@ -13,6 +13,7 @@ from tests.conftest import Recorder
 EXAMPLE_ENV = Path(__file__).resolve().parents[2] / ".env.example"
 TASK = "b1e2c3d4-5678-90ab-cdef-1234567890ab"
 POST = "/recipes/generate-menu"
+CART = "/recipes/cart"
 
 
 class Clock:
@@ -77,6 +78,55 @@ async def test_over_the_limit_gives_429_with_retry_after(upstream: Recorder) -> 
         }
     }
     assert len(upstream.requests) == 3  # отклонённый запрос в MS-4 не ушёл
+
+
+async def test_cart_has_a_separate_client_budget(upstream: Recorder) -> None:
+    app = build(upstream, rate_limit_requests=1)
+    async with client(app) as c:
+        assert (await c.post(POST)).status_code == 202
+        upstream.respond(
+            200, {"matches": [], "total": 0, "allMatched": True, "unmatchedCount": 0}
+        )
+        assert (await c.post(CART)).status_code == 200
+        rejected = await c.post(CART)
+    assert rejected.status_code == 429
+    wait = int(rejected.headers["retry-after"])
+    assert 1 <= wait <= 60
+    assert rejected.json()["error"]["details"] == {"retry_after_seconds": wait}
+    assert [request.url.path for request in upstream.requests] == [
+        "/generate-menu",
+        "/recipes/cart",
+    ]
+
+
+async def test_cart_has_a_separate_process_ceiling(upstream: Recorder) -> None:
+    app = build(upstream, rate_limit_global_requests=1)
+    async with client(app) as c:
+        assert (await c.post(POST)).status_code == 202
+    codes = []
+    for number in range(4):
+        async with client(app, f"203.0.113.{number}") as c:
+            codes.append((await c.post(CART)).status_code)
+    assert codes == [202, 202, 202, 429]
+
+
+async def test_bad_cart_path_and_oversized_body_refund_both_slots(
+    upstream: Recorder,
+) -> None:
+    app = build(upstream, cart_rate_limit_global_requests=1)
+    async with client(app) as first, client(app, "203.0.113.3") as second:
+        assert (await first.post("/recipes/%63art")).status_code == 400
+        assert (await first.post(CART, content=b"x" * 70_000)).status_code == 413
+        assert (await second.post(CART)).status_code == 202
+        assert (await first.post(CART)).status_code == 429
+    assert len(upstream.requests) == 1
+
+
+@pytest.mark.parametrize("flag", ["rate_limit_enabled", "cart_rate_limit_enabled"])
+async def test_cart_rate_limit_can_be_disabled(upstream: Recorder, flag: str) -> None:
+    app = build(upstream, **{flag: False})
+    async with client(app) as c:
+        assert [(await c.post(CART)).status_code for _ in range(4)] == [202] * 4
 
 
 async def test_limit_resets_after_the_window(upstream: Recorder) -> None:
@@ -525,6 +575,9 @@ def test_enabled_limit_needs_an_explicit_key_mode(
         {"rate_limit_requests": 10_000, "rate_limit_max_keys": 1_000_000},
         {"rate_limit_ipv6_prefix": 40},
         {"rate_limit_global_requests": 0},
+        {"cart_rate_limit_requests": 10_000, "rate_limit_max_keys": 1_000_000},
+        {"cart_rate_limit_global_requests": 0},
+        {"upstream_cart_timeout_seconds": 0},
     ],
 )
 def test_unsafe_rate_limit_settings_stop_the_start(bad: dict) -> None:

@@ -1,6 +1,6 @@
 """Минимальная заглушка MS-4 для локального запуска и интеграционных тестов.
 
-Отвечает по контракту API-1/API-2 (202 на создание, 404 в формате ошибки), а
+Отвечает по контрактам API-1, API-2, API-13 и API-14, а
 также имеет служебные /health, /metrics, /docs: если gateway их ошибочно
 пропустит, тесты это увидят.
 """
@@ -8,6 +8,7 @@
 import asyncio
 import gzip
 import json
+from uuid import UUID
 
 from fastapi import FastAPI, Request, Response
 
@@ -37,6 +38,26 @@ RESULT = {
         ]
     },
     "error": None,
+}
+CART_RESULT = {
+    "matches": [
+        {
+            "ingredient": {"name": "Вода", "quantity": 1, "unit": "л"},
+            "product": {
+                "id": 100,
+                "name": "Вода питьевая 1 л",
+                "price": {"current": 50, "currency": "RUB"},
+                "unit": "шт",
+                "weight": {"value": 1, "unit": "кг"},
+            },
+            "q": 1,
+            "warning": None,
+            "error": None,
+        }
+    ],
+    "total": 50,
+    "allMatched": True,
+    "unmatchedCount": 0,
 }
 
 
@@ -104,6 +125,19 @@ async def generate_result(task_id: str, request: Request) -> Response:
     if task_id.startswith("b1e2c3d4"):
         return Response(json.dumps(RESULT), media_type="application/json")
     return error(404, "NOT_FOUND", "Generation task not found")
+
+
+@app.post("/recipes/cart")
+async def cart(request: Request) -> Response:
+    try:
+        recipe_id = UUID((await request.json())["recipeId"])
+    except (AttributeError, ValueError, KeyError, TypeError):
+        return error(400, "VALIDATION_ERROR", "Request validation failed")
+    if str(recipe_id) != RESULT["menu"]["recipes"][0]["recipeId"]:
+        return error(404, "NOT_FOUND", "Recipe not found")
+    if request.query_params.get("slow") == "1":
+        await asyncio.sleep(1.25)
+    return Response(json.dumps(CART_RESULT), media_type="application/json")
 
 
 @app.get("/health")

@@ -3,7 +3,7 @@
   "info": {
     "title": "smai-api-receipes (контракт MS-4, снимок)",
     "version": "v1",
-    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55); API-1 с необязательным токеном и API-13 (SMAI-A-306, SMAI-102)."
+    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55); API-1 с необязательным токеном и API-13 (SMAI-A-306, SMAI-102). API-14 (SMAI-A-351, SMAI-118)."
   },
   "paths": {
     "/generate-menu": {
@@ -745,6 +745,597 @@
                     "code": "INTERNAL_ERROR",
                     "message": "Internal server error",
                     "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/cart": {
+      "post": {
+        "summary": "Собрать корзину для рецепта (API-14)",
+        "description": "Подбирает товары ВкусВилла для ингредиентов сохранённого негостевого рецепта. Поиск выполняется по recipeId. Список включает все ингредиенты, даже если для них не удалось подобрать товар или рассчитать количество. В total входит сумма product.price.current × q по позициям без ошибки. Частичный сбой каталога или истечение бюджета сохраняют уже рассчитанные позиции. Количество округляется вверх до 0,01 кг либо до целых штук. При превышении 40 возвращается q: 40 с предупреждением.\n\nJWT необязателен и не используется для проверки владельца рецепта. Переданный токен проверяется: неверная подпись, истёкший срок, неверный формат или отзыв дают 401. Если Redis недоступен, запрос с корректным токеном обрабатывается как гостевой. Gateway ограничивает частоту вызовов API-14 отдельно и по умолчанию ждёт ответ MS-4 до 40 секунд.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipeId"
+                ],
+                "properties": {
+                  "recipeId": {
+                    "type": "string",
+                    "description": "UUID сохранённого рецепта.",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "example": {
+                "recipeId": "00000000-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Корзина собрана. Полное, частичное или нулевое сопоставление ингредиентов.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "matches",
+                    "total",
+                    "allMatched",
+                    "unmatchedCount"
+                  ],
+                  "properties": {
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "ingredient",
+                          "product",
+                          "q",
+                          "warning",
+                          "error"
+                        ],
+                        "properties": {
+                          "ingredient": {
+                            "type": "object",
+                            "required": [
+                              "name",
+                              "quantity",
+                              "unit"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "Название ингредиента из рецепта."
+                              },
+                              "quantity": {
+                                "type": "number",
+                                "description": "Количество по рецепту."
+                              },
+                              "unit": {
+                                "type": "string",
+                                "description": "Единица измерения из рецепта."
+                              }
+                            }
+                          },
+                          "product": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "required": [
+                              "id",
+                              "name",
+                              "price",
+                              "unit",
+                              "weight"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "description": "Идентификатор товара в каталоге ВкусВилла."
+                              },
+                              "name": {
+                                "type": "string",
+                                "description": "Название товара."
+                              },
+                              "price": {
+                                "type": "object",
+                                "required": [
+                                  "current",
+                                  "currency"
+                                ],
+                                "properties": {
+                                  "current": {
+                                    "type": "number",
+                                    "description": "Текущая цена за единицу продажи.",
+                                    "minimum": 0
+                                  },
+                                  "currency": {
+                                    "type": "string",
+                                    "description": "Валюта цены.",
+                                    "const": "RUB"
+                                  }
+                                }
+                              },
+                              "unit": {
+                                "type": "string",
+                                "description": "Единица продажи товара.",
+                                "enum": [
+                                  "кг",
+                                  "шт"
+                                ]
+                              },
+                              "weight": {
+                                "type": [
+                                  "object",
+                                  "null"
+                                ],
+                                "required": [
+                                  "value",
+                                  "unit"
+                                ],
+                                "properties": {
+                                  "value": {
+                                    "type": "number",
+                                    "description": "Масса товара.",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "unit": {
+                                    "type": "string",
+                                    "description": "Единица массы.",
+                                    "const": "кг"
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "q": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Количество в единицах продажи. null, если количество определить не удалось.",
+                            "maximum": 40
+                          },
+                          "warning": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Предупреждение по позиции или null."
+                          },
+                          "error": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Причина, по которой позиция не вошла в корзину, или null."
+                          }
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "number",
+                      "description": "Стоимость позиций без ошибки.",
+                      "minimum": 0
+                    },
+                    "allMatched": {
+                      "type": "boolean",
+                      "description": "Для всех ингредиентов рассчитаны позиции."
+                    },
+                    "unmatchedCount": {
+                      "type": "integer",
+                      "description": "Количество ингредиентов с ошибкой.",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "examples": {
+                  "complete": {
+                    "summary": "Все позиции рассчитаны",
+                    "value": {
+                      "matches": [
+                        {
+                          "ingredient": {
+                            "name": "Морковь",
+                            "quantity": 700,
+                            "unit": "г"
+                          },
+                          "product": {
+                            "id": 72194,
+                            "name": "Морковь мытая 1,4 кг",
+                            "price": {
+                              "current": 119.9,
+                              "currency": "RUB"
+                            },
+                            "unit": "шт",
+                            "weight": {
+                              "value": 1.4,
+                              "unit": "кг"
+                            }
+                          },
+                          "q": 1,
+                          "warning": null,
+                          "error": null
+                        }
+                      ],
+                      "total": 119.9,
+                      "allMatched": true,
+                      "unmatchedCount": 0
+                    }
+                  },
+                  "partial": {
+                    "summary": "Рассчитана часть позиций",
+                    "value": {
+                      "matches": [
+                        {
+                          "ingredient": {
+                            "name": "Морковь",
+                            "quantity": 150,
+                            "unit": "г"
+                          },
+                          "product": {
+                            "id": 606,
+                            "name": "Морковь",
+                            "price": {
+                              "current": 53,
+                              "currency": "RUB"
+                            },
+                            "unit": "кг",
+                            "weight": null
+                          },
+                          "q": 0.15,
+                          "warning": null,
+                          "error": null
+                        },
+                        {
+                          "ingredient": {
+                            "name": "Мука",
+                            "quantity": 200,
+                            "unit": "г"
+                          },
+                          "product": null,
+                          "q": null,
+                          "warning": null,
+                          "error": "Товар не найден"
+                        }
+                      ],
+                      "total": 7.95,
+                      "allMatched": false,
+                      "unmatchedCount": 1
+                    }
+                  },
+                  "unmatched": {
+                    "summary": "Нет рассчитанных позиций",
+                    "value": {
+                      "matches": [
+                        {
+                          "ingredient": {
+                            "name": "Мука",
+                            "quantity": 200,
+                            "unit": "г"
+                          },
+                          "product": null,
+                          "q": null,
+                          "warning": null,
+                          "error": "Товар не найден"
+                        }
+                      ],
+                      "total": 0,
+                      "allMatched": false,
+                      "unmatchedCount": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса или recipeId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": {
+                      "fields": [
+                        {
+                          "loc": [
+                            "body",
+                            "recipeId"
+                          ],
+                          "type": "uuid_parsing"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Передан недействительный токен. Ответ содержит WWW-Authenticate: Bearer.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Поддерживаемая схема аутентификации.",
+                "schema": {
+                  "type": "string",
+                  "example": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Сохранённый негостевой рецепт с таким UUID не найден.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Recipe not found",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Превышен лимит корзины: по умолчанию 1 запрос за окно с клиента (CART_RATE_LIMIT_REQUESTS) и 3 запроса на процесс gateway (CART_RATE_LIMIT_GLOBAL_REQUESTS). Окно — RATE_LIMIT_WINDOW_SECONDS (60 секунд). Лимит настраивается отдельно от генерации и аутентификации и может быть отключён. Через сколько секунд повторить запрос, указано в Retry-After и в details.retry_after_seconds. Слот возвращается, если запрос заведомо не дошёл до MS-4 (400 от gateway, 413, 502 connect, 503 pool).",
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests, try again later",
+                    "details": {
+                      "retry_after_seconds": 60
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка при сборке корзины.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Каталог ВкусВилла недоступен или исчерпан пул соединений gateway с MS-4 (details.reason = pool).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "catalog": {
+                    "summary": "Каталог ВкусВилла недоступен",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "VkusVill catalog unavailable",
+                        "details": {}
+                      }
+                    }
+                  },
+                  "pool": {
+                    "summary": "Пул соединений gateway исчерпан",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Gateway is overloaded, try again later",
+                        "details": {
+                          "upstream": "recipes",
+                          "reason": "pool"
+                        }
+                      }
+                    }
                   }
                 }
               }

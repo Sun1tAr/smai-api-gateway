@@ -33,7 +33,7 @@ from gateway.observability import (
 )
 from gateway.profile import PROFILE_ROUTE
 from gateway.proxy import UpstreamClient
-from gateway.ratelimit import AUTH_LIMITED_ENDPOINTS, LIMITED_ENDPOINTS, RateLimiter
+from gateway.ratelimit import RATE_LIMITED_ENDPOINTS, RateLimiter
 from gateway.revocation import RevocationStore, create_redis
 from gateway.routing import load_routes
 from gateway.tokens import TokenIssuer, TokenVerifier
@@ -146,14 +146,35 @@ def create_app(
         if auth_limiter is not None
         else None
     )
+    cart_limiter = (
+        RateLimiter(
+            requests=settings.cart_rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=settings.rate_limit_max_keys,
+        )
+        if settings.rate_limit_enabled and settings.cart_rate_limit_enabled
+        else None
+    )
+    app.state.cart_rate_limiter = cart_limiter
+    app.state.cart_global_limiter = (
+        RateLimiter(
+            requests=settings.cart_rate_limit_global_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=1,
+        )
+        if cart_limiter is not None
+        else None
+    )
     app.state.rate_limit_metrics = RateLimitMetrics(
         registry,
-        limited_routes=sorted(
-            {path for _, path in LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS}
-        ),
+        limited_routes=sorted({path for _, path in RATE_LIMITED_ENDPOINTS}),
         tracked_keys=lambda: sum(
             item.tracked_keys
-            for item in (app.state.rate_limiter, app.state.auth_rate_limiter)
+            for item in (
+                app.state.rate_limiter,
+                app.state.auth_rate_limiter,
+                app.state.cart_rate_limiter,
+            )
             if item is not None
         ),
     )

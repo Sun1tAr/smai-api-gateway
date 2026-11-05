@@ -112,9 +112,55 @@ def test_default_routes_file_is_valid() -> None:
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
         "/recipes/profile/parameters",
+        "/recipes/cart",
     ]
-    assert [e.method for e in routes[0].endpoints] == ["POST", "GET", "GET"]
+    assert [e.method for e in routes[0].endpoints] == ["POST", "GET", "GET", "POST"]
     assert [e.gateway_path for e in routes[1].endpoints] == ["/dictionaries"]
+    cart = routes[0].endpoints[-1]
+    assert upstream_target(cart, b"/recipes/cart", b"a=%2F") == b"/recipes/cart?a=%2F"
+
+
+def test_mapped_path_uses_only_validated_parameters(tmp_path: Path) -> None:
+    routes = load_routes(
+        write(
+            tmp_path / "routes.toml",
+            GOOD.replace(
+                '"POST /generate-menu"',
+                '{ endpoint = "POST /a/{x}/{y}", upstream_path = "/v1/{y}/{x}" }',
+            ),
+        ),
+        {"recipes"},
+    )
+    endpoint = routes[0].endpoints[0]
+    assert upstream_target(endpoint, b"/recipes/a/%D0%B0/b") == b"/v1/b/%D0%B0"
+    for path in (b"/recipes/a/%2f/b", b"/recipes/a/a/%2e%2e", b"/recipes/%61/a/b"):
+        with pytest.raises(InvalidPath):
+            upstream_target(endpoint, path)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "target", "prefix", "error"),
+    [
+        ("POST /generate-menu", "/v1", "recipes", "duplicate endpoint"),
+        ("POST /docs", "/v1", "", "reserved or ambiguous"),
+        ("POST /a", "/../v1", "recipes", "invalid path segment"),
+        ("POST /a", "//other/v1", "recipes", "invalid path segment"),
+        ("POST /a", "/v1/%2f", "recipes", "invalid path segment"),
+        ("POST /a/{id}", "/v1/{other}", "recipes", "parameters"),
+        ("POST /a/{id}", "/v1/{id}/{id}", "recipes", "parameters"),
+    ],
+)
+def test_mapped_paths_keep_the_allowlist_checks(
+    tmp_path: Path, endpoint: str, target: str, prefix: str, error: str
+) -> None:
+    config = write(
+        tmp_path / "routes.toml",
+        f'[[route]]\nprefix = "{prefix}"\nupstream = "recipes"\n'
+        'allow = ["POST /generate-menu", '
+        f'{{ endpoint = "{endpoint}", upstream_path = "{target}" }}]\n',
+    )
+    with pytest.raises(RouteConfigError, match=error):
+        load_routes(config, {"recipes"})
 
 
 GET_DICTIONARIES = Endpoint("GET", "", "dictionary", "/dictionaries")

@@ -31,12 +31,13 @@ from gateway.ratelimit import (
     AUTH_LIMITED_ENDPOINTS,
     GLOBAL_KEY,
     LIMITED_ENDPOINTS,
+    RATE_LIMITED_ENDPOINTS,
     RateLimiter,
     ResolvedClient,
     rate_limit_key,
     resolve_client_ip,
 )
-from gateway.routing import Endpoint, InvalidPath, Route, upstream_target
+from gateway.routing import CART_ENDPOINT, Endpoint, InvalidPath, Route, upstream_target
 
 logger = structlog.get_logger()
 _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
@@ -59,10 +60,8 @@ PROTECTED_ENDPOINTS = frozenset(
         ("GET", "/recipes/profile/parameters"),
     }
 )
-# Маршруты с необязательным токеном (API-1): без токена гость, с токеном владелец
-# уходит в MS-4. Без зависимости optional_user все стали бы гостями, поэтому
-# check_protected_routes требует её при старте.
-OPTIONAL_AUTH_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu")})
+# Маршруты API-1 и API-14 должны проверять токен, когда он передан.
+OPTIONAL_AUTH_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu"), CART_ENDPOINT})
 # Путь в сервис задан кодом, а не запросом клиента: 400 за небезопасный путь невозможен.
 _FIXED_PATH = (*AUTH_ROUTE.endpoints, PROFILE_ENDPOINT)
 
@@ -252,18 +251,17 @@ def _operation_docs(
     for key in ("summary", "description", "responses"):
         if not operation.get(key):
             raise ContractError(f"{where}: no {key}")
+    endpoint_key = (endpoint.method, endpoint.gateway_path)
     responses: dict[int | str, dict[str, Any]] = {}
     for status in sorted(_GATEWAY_ERRORS):
         if status == 413 and endpoint.method not in _BODY_METHODS:
             continue
         if status == 400 and endpoint in _FIXED_PATH:
             continue
-        if status == 429 and (endpoint.method, endpoint.gateway_path) not in (
-            LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS
-        ):
+        if status == 429 and endpoint_key not in RATE_LIMITED_ENDPOINTS:
             continue
         responses[status] = _gateway_response(status, endpoint.upstream, limit)
-    if (endpoint.method, endpoint.gateway_path) in PROTECTED_ENDPOINTS:
+    if endpoint_key in PROTECTED_ENDPOINTS:
         responses[503] = _protected_503(endpoint, limit)
     # Ответы MS-4 описывают его собственные ошибки и перекрывают общие.
     for status, response in operation["responses"].items():
@@ -335,6 +333,8 @@ def _limiters(
         return state.rate_limiter, state.global_limiter
     if key in AUTH_LIMITED_ENDPOINTS:
         return state.auth_rate_limiter, state.auth_global_limiter
+    if key == CART_ENDPOINT:
+        return state.cart_rate_limiter, state.cart_global_limiter
     return None
 
 
@@ -467,7 +467,7 @@ def register_routes(
             _register(app, endpoint, _operation_docs(endpoint, contract, limit), limit)
             registered.add((endpoint.method, endpoint.gateway_path))
     # Переименованный путь иначе тихо остался бы без лимита.
-    missing = (LIMITED_ENDPOINTS | AUTH_LIMITED_ENDPOINTS) - registered
+    missing = RATE_LIMITED_ENDPOINTS - registered
     if missing:
         raise ContractError(f"rate limited endpoints are not routed: {sorted(missing)}")
 

@@ -18,6 +18,7 @@ from gateway.errors import (
 )
 from gateway.metrics import UpstreamMetrics
 from gateway.policy import Headers
+from gateway.routing import CART_ENDPOINT
 
 logger = structlog.get_logger()
 
@@ -58,6 +59,7 @@ class UpstreamClient:
         self._upstreams = upstreams
         self._max_response_bytes = settings.upstream_max_response_bytes
         self._total_timeout = settings.upstream_total_timeout_seconds
+        self._cart_timeout = settings.upstream_cart_timeout_seconds
         if transport is None:
             # retries повторяет только ошибки установки соединения: запрос не ушёл.
             transport = httpx.AsyncHTTPTransport(
@@ -102,7 +104,14 @@ class UpstreamClient:
     ) -> UpstreamResponse:
         started = time.perf_counter()
         try:
-            response = await self._forward(upstream, method, target, headers, body)
+            response = await self._forward(
+                upstream,
+                method,
+                target,
+                headers,
+                body,
+                cart=(method, route) == CART_ENDPOINT,
+            )
         except UpstreamFailure as failure:
             self._record_failure(upstream, route, failure, started)
             raise
@@ -159,6 +168,8 @@ class UpstreamClient:
         target: bytes,
         headers: Headers,
         body: bytes,
+        *,
+        cart: bool,
     ) -> UpstreamResponse:
         url = httpx.URL(self._upstreams[upstream]).copy_with(raw_path=target)
         outgoing = list(headers)
@@ -168,8 +179,12 @@ class UpstreamClient:
         request = self._client.build_request(
             method, url, headers=outgoing, content=body or None
         )
+        total_timeout = self._total_timeout
+        if cart:
+            request.extensions["timeout"]["read"] = self._cart_timeout
+            total_timeout = self._cart_timeout
         try:
-            async with asyncio.timeout(self._total_timeout):
+            async with asyncio.timeout(total_timeout):
                 return await self._send(request, upstream)
         except UpstreamFailure:
             raise

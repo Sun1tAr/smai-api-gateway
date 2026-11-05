@@ -696,8 +696,40 @@ def test_protected_endpoints_are_logout_profile_and_saved_parameters() -> None:
     }
 
 
-def test_optional_auth_endpoints_are_generate_menu_only() -> None:
-    assert api.OPTIONAL_AUTH_ENDPOINTS == {("POST", "/recipes/generate-menu")}
+def test_optional_auth_endpoints_are_generate_menu_and_cart() -> None:
+    assert api.OPTIONAL_AUTH_ENDPOINTS == {
+        ("POST", "/recipes/generate-menu"),
+        ("POST", "/recipes/cart"),
+    }
+
+
+@pytest.mark.parametrize("auth", ["missing", "valid", "invalid", "redis_down"])
+async def test_cart_accepts_guest_or_verified_identity(user, fake_redis, auth) -> None:
+    redis = (
+        BrokenRedis(redis_errors.ConnectionError("down"))
+        if auth == "redis_down"
+        else fake_redis
+    )
+    app = build(user, redis)
+    user.respond(
+        200, {"matches": [], "total": 0, "allMatched": True, "unmatchedCount": 0}
+    )
+    headers = {"X-User-Id": "1"}
+    if auth == "invalid":
+        headers["Authorization"] = "Bearer invalid.jwt.token"
+    elif auth != "missing":
+        headers.update(bearer(app))
+    async with client_for(app) as client:
+        response = await client.post("/recipes/cart", headers=headers)
+    if auth == "invalid":
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Bearer"
+        assert user.requests == []
+    else:
+        assert response.status_code == 200
+        sent = user.requests[0].headers
+        assert "authorization" not in sent
+        assert sent.get_list("x-user-id") == (["42"] if auth == "valid" else [])
 
 
 def test_startup_fails_if_generate_menu_has_no_optional_token_check(
