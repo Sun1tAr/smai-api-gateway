@@ -1,6 +1,6 @@
 """Минимальная заглушка MS-4 для локального запуска и интеграционных тестов.
 
-Отвечает по контрактам API-1, API-2, API-13, API-14 и API-16, а
+Отвечает по контрактам API-1, API-2, API-13, API-14, API-16 и API-18, а
 также имеет служебные /health, /metrics, /docs: если gateway их ошибочно
 пропустит, тесты это увидят.
 """
@@ -125,6 +125,24 @@ async def generate_result(task_id: str, request: Request) -> Response:
     if task_id.startswith("b1e2c3d4"):
         return Response(json.dumps(RESULT), media_type="application/json")
     return error(404, "NOT_FOUND", "Generation task not found")
+
+
+@app.post("/generate-menu/{task_id}/replace-recipe")
+async def replace_recipe(task_id: str, request: Request) -> Response:
+    recipe = RESULT["menu"]["recipes"][0]
+    payload = await request.json()
+    if (
+        task_id != "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+        or payload.get("recipeId") != recipe["recipeId"]
+    ):
+        return error(404, "NOT_FOUND", "Generation task or recipe not found")
+    await asyncio.sleep(1.25)
+    replaced = {
+        **recipe,
+        "recipeId": "00000000-0000-4000-8000-000000000004",
+        "name": "Новый рецепт",
+    }
+    return Response(json.dumps({"recipe": replaced}), media_type="application/json")
 
 
 @app.post("/recipes/cart")

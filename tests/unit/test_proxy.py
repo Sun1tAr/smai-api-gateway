@@ -17,6 +17,8 @@ from gateway.proxy import UpstreamClient
 from tests.conftest import reply
 
 Handler = Callable[[httpx.Request], httpx.Response]
+REPLACE_ROUTE = "/recipes/generate-menu/{task_id}/replace-recipe"
+REPLACE_TARGET = b"/generate-menu/x/replace-recipe"
 
 
 def make_client(handler: Handler, **overrides: object) -> UpstreamClient:
@@ -164,6 +166,68 @@ async def test_cart_uses_40_seconds_read_budget_without_changing_other_routes() 
     assert float(cart.body) == 40
     assert float(link.body) == 10
     assert float(other.body) == 10
+
+
+async def test_replace_read_timeout_applies_only_to_the_post_route_template() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return reply()
+
+    upstream = make_client(handler)
+    try:
+        await forward(
+            upstream, method="POST", route=REPLACE_ROUTE, target=REPLACE_TARGET
+        )
+        await forward(
+            upstream, method="GET", route=REPLACE_ROUTE, target=REPLACE_TARGET
+        )
+        await forward(
+            upstream,
+            method="POST",
+            route="/recipes/generate-menu/x/replace-recipe",
+            target=REPLACE_TARGET,
+        )
+        await forward(upstream, method="POST", route="/recipes/generate-menu")
+    finally:
+        await upstream.aclose()
+    assert seen[0] == {"connect": 3, "read": 125, "write": 5, "pool": 2}
+    assert [timeouts["read"] for timeouts in seen[1:]] == [10, 10, 10]
+
+
+@pytest.mark.parametrize(
+    ("replace_timeout", "standard_timeout", "expires"),
+    [(0.01, 1, True), (1, 0.01, False)],
+)
+async def test_replace_uses_its_own_total_deadline(
+    replace_timeout: float, standard_timeout: float, expires: bool
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.1)
+        return reply()
+
+    upstream = make_client(
+        handler,
+        upstream_replace_timeout_seconds=replace_timeout,
+        upstream_total_timeout_seconds=standard_timeout,
+    )
+    try:
+        if expires:
+            with pytest.raises(UpstreamTimeout):
+                await forward(
+                    upstream, method="POST", route=REPLACE_ROUTE, target=REPLACE_TARGET
+                )
+        else:
+            assert (
+                await forward(
+                    upstream, method="POST", route=REPLACE_ROUTE, target=REPLACE_TARGET
+                )
+            ).status_code == 200
+            with pytest.raises(UpstreamTimeout):
+                await forward(upstream, method="POST", route="/recipes/generate-menu")
+    finally:
+        await upstream.aclose()
 
 
 async def test_cart_uses_its_own_total_deadline() -> None:

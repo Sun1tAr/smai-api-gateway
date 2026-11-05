@@ -8,13 +8,15 @@ from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from gateway.routing import CART_ENDPOINT, CART_LINK_ENDPOINT
+from gateway.routing import CART_ENDPOINT, CART_LINK_ENDPOINT, REPLACE_RECIPE_ENDPOINT
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 # Ограничена дорогая LLM-генерация.
-LIMITED_ENDPOINTS = frozenset({("POST", "/recipes/generate-menu")})
+LIMITED_ENDPOINTS = frozenset(
+    {("POST", "/recipes/generate-menu"), REPLACE_RECIPE_ENDPOINT}
+)
 # Вход и регистрация: перебор паролей и заливка дорогим хэшированием в MS-3.
 AUTH_LIMITED_ENDPOINTS = frozenset(
     {("POST", "/auth/register"), ("POST", "/auth/login")}

@@ -3,7 +3,7 @@
   "info": {
     "title": "smai-api-receipes (контракт MS-4, снимок)",
     "version": "v1",
-    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55); API-1 с необязательным токеном и API-13 (SMAI-A-306, SMAI-102). API-14 (SMAI-A-351, SMAI-118)."
+    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55); API-1 с необязательным токеном и API-13 (SMAI-A-306, SMAI-102). API-14 (SMAI-A-351, SMAI-118). API-18 (SMAI-A-359, SMAI-120)."
   },
   "paths": {
     "/generate-menu": {
@@ -583,6 +583,328 @@
             "description": "Идентификатор задачи, полученный от API-1."
           }
         ]
+      }
+    },
+    "/generate-menu/{task_id}/replace-recipe": {
+      "post": {
+        "summary": "Замена рецепта в готовом меню (API-18)",
+        "description": "Заменяет выбранный рецепт в готовом меню и возвращает новый рецепт. Передай идентификатор задачи от API-1 и `recipeId` из результата API-2. После успеха API-2 возвращает меню с новым рецептом. Маршрут публичный. Запуск генерации и замена рецепта используют общие лимиты gateway. Срок ожидания MS-4 включает очередь.",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Идентификатор задачи, полученный от API-1.",
+            "example": "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipeId"
+                ],
+                "properties": {
+                  "recipeId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Идентификатор заменяемого рецепта из API-2."
+                  }
+                }
+              },
+              "example": {
+                "recipeId": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Рецепт заменён. Возвращается новый рецепт.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recipe"
+                  ],
+                  "properties": {
+                    "recipe": {
+                      "type": "object",
+                      "required": [
+                        "recipeId",
+                        "name",
+                        "ingredients",
+                        "calories",
+                        "nutrition",
+                        "cookingTime",
+                        "instructions"
+                      ],
+                      "properties": {
+                        "recipeId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Идентификатор сохранённого рецепта."
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "ingredients": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "name",
+                              "quantity",
+                              "unit"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "quantity": {
+                                "type": "number"
+                              },
+                              "unit": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "calories": {
+                          "type": "number",
+                          "description": "Калорийность, ккал."
+                        },
+                        "nutrition": {
+                          "type": "object",
+                          "required": [
+                            "calories",
+                            "proteins",
+                            "fats",
+                            "carbohydrates"
+                          ],
+                          "properties": {
+                            "calories": {
+                              "type": "number"
+                            },
+                            "proteins": {
+                              "type": "number"
+                            },
+                            "fats": {
+                              "type": "number"
+                            },
+                            "carbohydrates": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "cookingTime": {
+                          "type": "number",
+                          "description": "Время готовки, мин."
+                        },
+                        "instructions": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "photo": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Ссылка на фотографию."
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "recipe": {
+                    "name": "Овсяная каша с ягодами",
+                    "ingredients": [
+                      {
+                        "name": "Овсяные хлопья",
+                        "quantity": 200,
+                        "unit": "г"
+                      },
+                      {
+                        "name": "Молоко",
+                        "quantity": 500,
+                        "unit": "мл"
+                      },
+                      {
+                        "name": "Ягоды",
+                        "quantity": 150,
+                        "unit": "г"
+                      }
+                    ],
+                    "calories": 320,
+                    "nutrition": {
+                      "calories": 320,
+                      "proteins": 12,
+                      "fats": 8,
+                      "carbohydrates": 50
+                    },
+                    "cookingTime": 15,
+                    "instructions": [
+                      "Вскипятить молоко.",
+                      "Добавить овсяные хлопья и варить 5 минут.",
+                      "Добавить ягоды и подать."
+                    ],
+                    "photo": "https://example.com/photos/oatmeal.jpg",
+                    "recipeId": "00000000-0000-4000-8000-000000000004"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса. Передай `recipeId` в формате UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": {
+                      "fields": [
+                        {
+                          "loc": [
+                            "body",
+                            "recipeId"
+                          ],
+                          "type": "uuid_parsing"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Идентификатор задачи некорректен, готовое меню для неё не найдено или в меню нет указанного рецепта.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Generation task or recipe not found",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Замена завершилась ошибкой или истёк срок ожидания MS-4.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/profile/parameters": {

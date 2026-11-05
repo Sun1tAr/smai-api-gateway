@@ -111,6 +111,7 @@ def test_default_routes_file_is_valid() -> None:
     assert [e.gateway_path for e in routes[0].endpoints] == [
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
+        "/recipes/generate-menu/{task_id}/replace-recipe",
         "/recipes/profile/parameters",
         "/recipes/cart",
         "/recipes/cart/link",
@@ -118,6 +119,7 @@ def test_default_routes_file_is_valid() -> None:
     assert [e.method for e in routes[0].endpoints] == [
         "POST",
         "GET",
+        "POST",
         "GET",
         "POST",
         "POST",

@@ -12,7 +12,10 @@ CONTRACT = json.loads(Path("contracts/receipes.openapi.json").read_text("utf-8")
 DICTIONARY_CONTRACT = json.loads(
     Path("contracts/dictionary.openapi.json").read_text("utf-8")
 )
+API2 = "/recipes/generate-menu/{task_id}"
+API18 = f"{API2}/replace-recipe"
 OPERATIONS = [
+    (API18, "post", "/generate-menu/{task_id}/replace-recipe"),
     ("/recipes/generate-menu", "post", "/generate-menu"),
     ("/recipes/generate-menu/{task_id}", "get", "/generate-menu/{task_id}"),
     ("/recipes/profile/parameters", "get", "/profile/parameters"),
@@ -20,6 +23,7 @@ OPERATIONS = [
     ("/recipes/cart/link", "post", "/recipes/cart/link"),
 ]
 GATEWAY_CODES = {
+    ("post", API18): {"200", "400", "404", "413", "429", "500", "502", "503", "504"},
     ("post", "/recipes/generate-menu"): {
         "202",
         "400",
@@ -160,6 +164,38 @@ def test_every_error_is_documented_with_an_example(
         assert response["description"]
         media = response["content"]["application/json"]
         assert "example" in media or "examples" in media, status
+
+
+def test_api18_documents_a_public_replacement_with_the_api2_recipe_shape(
+    schema: dict,
+) -> None:
+    operation = schema["paths"][API18]["post"]
+    assert "security" not in operation
+    (parameter,) = operation["parameters"]
+    assert (parameter["in"], parameter["name"], parameter["required"]) == (
+        "path",
+        "task_id",
+        True,
+    )
+    assert parameter["schema"] == {"type": "string", "format": "uuid"}
+    request = operation["requestBody"]
+    assert request["required"]
+    body = request["content"]["application/json"]
+    assert body["schema"]["required"] == ["recipeId"]
+    assert body["schema"]["properties"]["recipeId"]["format"] == "uuid"
+    jsonschema.validate(body["example"], body["schema"])
+    api2 = schema["paths"][API2]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]
+    recipe = api2["schema"]["properties"]["menu"]["properties"]["recipes"]["items"]
+    ok = operation["responses"]["200"]["content"]["application/json"]
+    assert ok["schema"]["required"] == ["recipe"]
+    assert ok["schema"]["properties"] == {"recipe": recipe}
+    jsonschema.validate(ok["example"], ok["schema"])
+    assert "$ref" not in json.dumps(
+        CONTRACT["paths"]["/generate-menu/{task_id}/replace-recipe"]
+    )
+    assert "Retry-After" in operation["responses"]["429"]["headers"]
 
 
 def test_success_codes(schema: dict) -> None:

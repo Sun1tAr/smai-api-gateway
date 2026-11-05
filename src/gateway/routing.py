@@ -11,6 +11,7 @@ RESERVED_PREFIXES = frozenset(
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 CART_ENDPOINT = ("POST", "/recipes/cart")
 CART_LINK_ENDPOINT = ("POST", "/recipes/cart/link")
+REPLACE_RECIPE_ENDPOINT = ("POST", "/recipes/generate-menu/{task_id}/replace-recipe")
 
 _PREFIX = re.compile(r"[a-z][a-z0-9-]*")
 _LITERAL = re.compile(r"[A-Za-z0-9._~-]+")
