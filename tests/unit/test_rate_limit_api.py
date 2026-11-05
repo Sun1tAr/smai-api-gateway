@@ -14,6 +14,7 @@ EXAMPLE_ENV = Path(__file__).resolve().parents[2] / ".env.example"
 TASK = "b1e2c3d4-5678-90ab-cdef-1234567890ab"
 POST = "/recipes/generate-menu"
 CART = "/recipes/cart"
+CART_LINK = "/recipes/cart/link"
 
 
 class Clock:
@@ -110,6 +111,30 @@ async def test_cart_has_a_separate_process_ceiling(upstream: Recorder) -> None:
     assert codes == [202, 202, 202, 429]
 
 
+async def test_cart_link_has_its_own_client_budget_and_shares_cart_process_ceiling(
+    upstream: Recorder,
+) -> None:
+    app = build(upstream)
+    async with (
+        client(app) as first,
+        client(app, "203.0.113.10") as second,
+        client(app, "203.0.113.11") as third,
+    ):
+        assert (await first.post(CART)).status_code == 202
+        assert (await first.post(CART_LINK)).status_code == 202
+        repeated = await first.post(CART_LINK)
+        assert repeated.status_code == 429
+        assert 1 <= int(repeated.headers["retry-after"]) <= 60
+        assert (await second.post(CART_LINK)).status_code == 202
+        assert (await third.post(CART)).status_code == 429
+        assert (await third.post(CART_LINK)).status_code == 429
+    assert [request.url.path for request in upstream.requests] == [
+        CART,
+        CART_LINK,
+        CART_LINK,
+    ]
+
+
 async def test_bad_cart_path_and_oversized_body_refund_both_slots(
     upstream: Recorder,
 ) -> None:
@@ -123,10 +148,13 @@ async def test_bad_cart_path_and_oversized_body_refund_both_slots(
 
 
 @pytest.mark.parametrize("flag", ["rate_limit_enabled", "cart_rate_limit_enabled"])
-async def test_cart_rate_limit_can_be_disabled(upstream: Recorder, flag: str) -> None:
+@pytest.mark.parametrize("path", [CART, CART_LINK])
+async def test_cart_rate_limit_can_be_disabled(
+    upstream: Recorder, flag: str, path: str
+) -> None:
     app = build(upstream, **{flag: False})
     async with client(app) as c:
-        assert [(await c.post(CART)).status_code for _ in range(4)] == [202] * 4
+        assert [(await c.post(path)).status_code for _ in range(4)] == [202] * 4
 
 
 async def test_limit_resets_after_the_window(upstream: Recorder) -> None:

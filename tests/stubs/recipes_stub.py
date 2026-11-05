@@ -1,6 +1,6 @@
 """Минимальная заглушка MS-4 для локального запуска и интеграционных тестов.
 
-Отвечает по контрактам API-1, API-2, API-13 и API-14, а
+Отвечает по контрактам API-1, API-2, API-13, API-14 и API-16, а
 также имеет служебные /health, /metrics, /docs: если gateway их ошибочно
 пропустит, тесты это увидят.
 """
@@ -138,6 +138,19 @@ async def cart(request: Request) -> Response:
     if request.query_params.get("slow") == "1":
         await asyncio.sleep(1.25)
     return Response(json.dumps(CART_RESULT), media_type="application/json")
+
+
+@app.post("/recipes/cart/link")
+async def cart_link(request: Request) -> Response:
+    items = (await request.json()).get("items")
+    if items == [{"id": 100, "q": 1}]:
+        return Response(
+            json.dumps({"link": "https://vkusvill.ru/mobile?basket&share=test"}),
+            media_type="application/json",
+        )
+    if items == [{"id": 101, "q": 1}]:
+        return error(503, "EXTERNAL_SERVICE_ERROR", "VkusVill cart link unavailable")
+    return error(400, "VALIDATION_ERROR", "Request validation failed")
 
 
 @app.get("/health")

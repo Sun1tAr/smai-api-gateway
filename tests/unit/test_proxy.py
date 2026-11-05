@@ -157,10 +157,12 @@ async def test_cart_uses_40_seconds_read_budget_without_changing_other_routes() 
     upstream = make_client(handler)
     try:
         cart = await forward(upstream, method="POST", route="/recipes/cart")
+        link = await forward(upstream, method="POST", route="/recipes/cart/link")
         other = await forward(upstream)
     finally:
         await upstream.aclose()
     assert float(cart.body) == 40
+    assert float(link.body) == 10
     assert float(other.body) == 10
 
 
@@ -176,6 +178,21 @@ async def test_cart_uses_its_own_total_deadline() -> None:
         with pytest.raises(UpstreamTimeout):
             await forward(upstream, method="POST", route="/recipes/cart")
         assert (await forward(upstream)).status_code == 200
+    finally:
+        await upstream.aclose()
+
+
+async def test_cart_link_uses_the_standard_total_deadline() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.15)
+        return reply()
+
+    upstream = make_client(
+        handler, upstream_total_timeout_seconds=0.05, upstream_cart_timeout_seconds=1
+    )
+    try:
+        with pytest.raises(UpstreamTimeout):
+            await forward(upstream, method="POST", route="/recipes/cart/link")
     finally:
         await upstream.aclose()
 

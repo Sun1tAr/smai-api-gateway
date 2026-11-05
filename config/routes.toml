@@ -8,6 +8,7 @@ allow = [
     "GET /generate-menu/{task_id}",
     "GET /profile/parameters",
     { endpoint = "POST /cart", upstream_path = "/recipes/cart" },
+    { endpoint = "POST /cart/link", upstream_path = "/recipes/cart/link" },
 ]
 
 # Путь словаря на gateway совпадает с путём сервиса, поэтому префикс пустой.

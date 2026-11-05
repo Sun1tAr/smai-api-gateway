@@ -17,6 +17,7 @@ OPERATIONS = [
     ("/recipes/generate-menu/{task_id}", "get", "/generate-menu/{task_id}"),
     ("/recipes/profile/parameters", "get", "/profile/parameters"),
     ("/recipes/cart", "post", "/recipes/cart"),
+    ("/recipes/cart/link", "post", "/recipes/cart/link"),
 ]
 GATEWAY_CODES = {
     ("post", "/recipes/generate-menu"): {
@@ -54,6 +55,16 @@ GATEWAY_CODES = {
         "400",
         "401",
         "404",
+        "413",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    ("post", "/recipes/cart/link"): {
+        "200",
+        "400",
         "413",
         "429",
         "500",
@@ -125,8 +136,15 @@ def test_operation_matches_the_contract_snapshot(
         actual = operation["responses"][status]["content"]["application/json"]
         wanted = response["content"]["application/json"]
         if status == "400":
-            # Пример MS-4 остаётся, рядом появляется пример самого gateway.
-            assert set(actual["examples"]) == {"ms4_validation", "gateway_path"}
+            # Gateway добавляет пример ошибки пути и сохраняет примеры MS-4.
+            upstream_examples = (
+                {"ms4_validation": {"value": wanted["example"]}}
+                if "example" in wanted
+                else wanted["examples"]
+            )
+            assert set(actual["examples"]) == {*upstream_examples, "gateway_path"}
+            for name, example in upstream_examples.items():
+                assert actual["examples"][name] == example
             assert actual["schema"] == wanted["schema"]
         else:
             assert actual == wanted
@@ -298,3 +316,31 @@ def test_api14_documents_optional_auth_and_its_own_limit(schema: dict) -> None:
     assert limit["headers"]["Retry-After"]["schema"]["type"] == "integer"
     assert "CART_RATE_LIMIT_REQUESTS" in limit["description"]
     assert "CART_RATE_LIMIT_GLOBAL_REQUESTS" in limit["description"]
+
+
+def test_api16_documents_a_public_cart_link_and_item_limits(schema: dict) -> None:
+    operation = schema["paths"]["/recipes/cart/link"]["post"]
+    assert not operation.get("security")
+    request = operation["requestBody"]["content"]["application/json"]
+    items = request["schema"]["properties"]["items"]
+    assert (items["minItems"], items["maxItems"]) == (1, 20)
+    assert set(items["items"]["required"]) == {"id", "q"}
+    properties = items["items"]["properties"]
+    assert (
+        properties["id"]["type"],
+        properties["id"]["minimum"],
+        properties["id"]["maximum"],
+    ) == ("integer", 1, 999999999)
+    assert (
+        properties["q"]["type"],
+        properties["q"]["minimum"],
+        properties["q"]["maximum"],
+    ) == ("number", 0.01, 40)
+    jsonschema.validate(request["example"], request["schema"])
+    response = operation["responses"]["200"]["content"]["application/json"]
+    assert response["schema"]["required"] == ["link"]
+    jsonschema.validate(response["example"], response["schema"])
+    limited = operation["responses"]["429"]
+    assert limited["headers"]["Retry-After"]["schema"]["type"] == "integer"
+    assert "CART_RATE_LIMIT_REQUESTS" in limited["description"]
+    assert "CART_RATE_LIMIT_GLOBAL_REQUESTS" in limited["description"]

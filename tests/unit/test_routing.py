@@ -113,11 +113,21 @@ def test_default_routes_file_is_valid() -> None:
         "/recipes/generate-menu/{task_id}",
         "/recipes/profile/parameters",
         "/recipes/cart",
+        "/recipes/cart/link",
     ]
-    assert [e.method for e in routes[0].endpoints] == ["POST", "GET", "GET", "POST"]
+    assert [e.method for e in routes[0].endpoints] == [
+        "POST",
+        "GET",
+        "GET",
+        "POST",
+        "POST",
+    ]
     assert [e.gateway_path for e in routes[1].endpoints] == ["/dictionaries"]
-    cart = routes[0].endpoints[-1]
+    cart, link = routes[0].endpoints[-2:]
     assert upstream_target(cart, b"/recipes/cart", b"a=%2F") == b"/recipes/cart?a=%2F"
+    assert upstream_target(link, b"/recipes/cart/link", b"a=%2F") == (
+        b"/recipes/cart/link?a=%2F"
+    )
 
 
 def test_mapped_path_uses_only_validated_parameters(tmp_path: Path) -> None:
