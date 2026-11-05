@@ -14,6 +14,8 @@ DICTIONARY_CONTRACT = json.loads(
 )
 API2 = "/recipes/generate-menu/{task_id}"
 API18 = f"{API2}/replace-recipe"
+LIKE = "/recipes/{recipe_id}/like"
+LIKED = "/recipes/liked"
 OPERATIONS = [
     (API18, "post", "/generate-menu/{task_id}/replace-recipe"),
     ("/recipes/generate-menu", "post", "/generate-menu"),
@@ -21,8 +23,25 @@ OPERATIONS = [
     ("/recipes/profile/parameters", "get", "/profile/parameters"),
     ("/recipes/cart", "post", "/recipes/cart"),
     ("/recipes/cart/link", "post", "/recipes/cart/link"),
+    (LIKE, "post", LIKE),
+    (LIKE, "delete", LIKE),
+    (LIKED, "get", LIKED),
 ]
 GATEWAY_CODES = {
+    ("post", LIKE): {
+        "200",
+        "400",
+        "401",
+        "404",
+        "409",
+        "413",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    ("delete", LIKE): {"200", "400", "401", "404", "500", "502", "503", "504"},
+    ("get", LIKED): {"200", "400", "401", "500", "502", "503", "504"},
     ("post", API18): {"200", "400", "404", "413", "429", "500", "502", "503", "504"},
     ("post", "/recipes/generate-menu"): {
         "202",
@@ -380,3 +399,31 @@ def test_api16_documents_a_public_cart_link_and_item_limits(schema: dict) -> Non
     assert limited["headers"]["Retry-After"]["schema"]["type"] == "integer"
     assert "CART_RATE_LIMIT_REQUESTS" in limited["description"]
     assert "CART_RATE_LIMIT_GLOBAL_REQUESTS" in limited["description"]
+
+
+@pytest.mark.parametrize(
+    "path, method", [(LIKE, "post"), (LIKE, "delete"), (LIKED, "get")]
+)
+def test_recipe_likes_document_bearer_auth_and_gateway_failures(schema, path, method):
+    operation = schema["paths"][path][method]
+    assert operation["security"] == [{"bearerAuth": []}]
+    parameters = operation.get("parameters", [])
+    assert [(p["name"], p["in"]) for p in parameters] == (
+        [("recipe_id", "path")] if path == LIKE else []
+    )
+    if parameters:
+        assert parameters[0]["required"] is True
+        assert parameters[0]["schema"]["format"] == "uuid"
+    unauthorized = operation["responses"]["401"]
+    assert unauthorized["headers"]["WWW-Authenticate"]["schema"]["example"] == "Bearer"
+    assert unauthorized["content"]["application/json"]["example"] == {
+        "error": {
+            "code": "UNAUTHORIZED",
+            "message": "Authentication token is missing or invalid",
+            "details": {},
+        }
+    }
+    unavailable = operation["responses"]["503"]["content"]["application/json"]
+    assert set(unavailable["examples"]) == {"redis", "pool"}
+    redis = unavailable["examples"]["redis"]["value"]["error"]
+    assert redis["details"] == {"upstream": "redis", "reason": "connect"}

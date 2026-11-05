@@ -115,6 +115,9 @@ def test_default_routes_file_is_valid() -> None:
         "/recipes/profile/parameters",
         "/recipes/cart",
         "/recipes/cart/link",
+        "/recipes/{recipe_id}/like",
+        "/recipes/{recipe_id}/like",
+        "/recipes/liked",
     ]
     assert [e.method for e in routes[0].endpoints] == [
         "POST",
@@ -123,9 +126,14 @@ def test_default_routes_file_is_valid() -> None:
         "GET",
         "POST",
         "POST",
+        "POST",
+        "DELETE",
+        "GET",
     ]
     assert [e.gateway_path for e in routes[1].endpoints] == ["/dictionaries"]
-    cart, link = routes[0].endpoints[-2:]
+    cart, link, like, unlike, liked = routes[0].endpoints[-5:]
+    assert like.upstream_path == unlike.upstream_path == "/recipes/{recipe_id}/like"
+    assert liked.upstream_path == "/recipes/liked"
     assert upstream_target(cart, b"/recipes/cart", b"a=%2F") == b"/recipes/cart?a=%2F"
     assert upstream_target(link, b"/recipes/cart/link", b"a=%2F") == (
         b"/recipes/cart/link?a=%2F"

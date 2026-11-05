@@ -21,6 +21,9 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
 | `POST /recipes/cart` | `POST /recipes/cart` | 200 `{"matches","total","allMatched","unmatchedCount"}` для сохранённого негостевого рецепта, токен необязателен | API-14 (SMAI-A-351) |
 | `POST /recipes/cart/link` | `POST /recipes/cart/link` | 200 `{"link":"<HTTPS URL ВкусВилла>"}`, без аутентификации | API-16 (SMAI-A-355) |
+| `POST /recipes/{recipe_id}/like` | Тот же путь | 200 `{"success":true}`; токен обязателен | API-19 (SMAI-A-361) |
+| `DELETE /recipes/{recipe_id}/like` | Тот же путь | 200 `{"success":true}`; токен обязателен | API-20 (SMAI-A-363) |
+| `GET /recipes/liked` | Тот же путь | 200 `{"recipes":[…]}` с избранным пользователя; токен обязателен | API-21 (SMAI-A-365) |
 | `GET /dictionaries` | `GET /dictionaries` (MS-2) | 200 `{"habits","diets","allergies","kitchenTools"}` | API-7 (SMAI-A-194) |
 | `POST /auth/register` | `POST /register` (MS-3) | 201 `{"userId","token"}` | API-8 (SMAI-A-259) |
 | `POST /auth/login` | `POST /login` (MS-3) | 200 `{"userId","token"}` | API-9 (SMAI-A-261) |
@@ -43,13 +46,13 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | HTTP | `error.code` | Когда |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | небезопасный путь (`..`, `%2f`, `%00` и т. п.) или query |
-| 401 | `UNAUTHORIZED` | `POST /auth/logout`, `GET /user/profile`, `GET /recipes/profile/parameters`: токен отсутствует, недействителен (подпись, срок, формат), отозван или выдан удалённому пользователю. `POST /recipes/generate-menu`, `POST /recipes/cart`: передан недействительный токен. Причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
+| 401 | `UNAUTHORIZED` | токен для защищённого маршрута отсутствует, недействителен (подпись, срок, формат) или отозван. `GET /user/profile` также возвращает 401 для удалённого пользователя. `POST /recipes/generate-menu`, `POST /recipes/cart`: передан недействительный токен. Причина в ответе не раскрывается, заголовок `WWW-Authenticate: Bearer` |
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
 | 429 | `RATE_LIMITED` | API-1 и API-18, `POST /recipes/cart`, `POST /recipes/cart/link`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок. Заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
-| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout`, `/user/profile` и `/recipes/profile/parameters` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
+| 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для защищённых маршрутов недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
 | 500 | `INTERNAL_ERROR` | непредвиденная ошибка gateway |
 
@@ -57,6 +60,14 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 Ответы 503 самого MS-4 (например, переполненная очередь или недоступный каталог
 ВкусВилла) проходят как есть. Если API-1 вернул 504, не повторяйте запрос
 автоматически: задача могла быть создана.
+
+### Лайки рецептов (API-19, API-20, API-21)
+
+Для всех трёх запросов нужен `Authorization: Bearer <jwt>`. Gateway берёт ID
+пользователя из токена. Передай UUID рецепта в пути для добавления или удаления
+лайка. MS-4 возвращает 404, если рецепт для добавления или свой лайк для удаления
+не найден, и 409 при повторном добавлении. Список содержит карточки избранного,
+начиная с самых недавних. Если лайков нет, MS-4 возвращает `{"recipes":[]}`.
 
 ### Замена рецепта (API-18)
 
@@ -215,9 +226,9 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 
 ### Проверка токена, выход и профиль (SMAI-101)
 
-**Защищённые маршруты** — `POST /auth/logout`, `GET /user/profile` и
-`GET /recipes/profile/parameters` (API-13); в коде их
-перечисляет `PROTECTED_ENDPOINTS` (`src/gateway/api.py`). Если у такого маршрута нет
+**Защищённые маршруты** — `POST /auth/logout`, `GET /user/profile`,
+`GET /recipes/profile/parameters` (API-13) и три маршрута лайков (API-19–21).
+В коде их перечисляет `PROTECTED_ENDPOINTS` (`src/gateway/api.py`). Если у маршрута нет
 зависимости проверки токена или он не зарегистрирован, gateway не стартует. Остальные
 маршруты работают без токена; `POST /recipes/generate-menu` принимает токен
 необязательно (см. «Необязательный токен» ниже).
