@@ -61,6 +61,25 @@ async def test_query_reaches_the_upstream_byte_for_byte(
     assert stub_requests[0]["target"] == f"/generate-menu/{TASK}?a=1&b=%D0%B0&c=%2F"
 
 
+async def test_api18_outlasts_standard_timeouts_over_http(
+    stub_url, stub_requests, open_gateway
+) -> None:
+    async with open_gateway(stub_url, upstream_replace_timeout_seconds=5) as gateway:
+        response = await gateway.post(
+            f"/recipes/generate-menu/{TASK}/replace-recipe",
+            json={"recipeId": "00000000-0000-4000-8000-000000000001"},
+        )
+    assert response.status_code == 200
+    assert (
+        response.json()["recipe"]["recipeId"] == "00000000-0000-4000-8000-000000000004"
+    )
+    (seen,) = stub_requests
+    assert (seen["method"], seen["target"]) == (
+        "POST",
+        f"/generate-menu/{TASK}/replace-recipe",
+    )
+
+
 async def test_cart_keeps_the_explicit_upstream_path_and_outlasts_other_timeouts(
     stub_url, stub_requests, open_gateway
 ) -> None:
@@ -223,6 +242,7 @@ async def test_service_endpoints_of_the_gateway_itself(stub_url, open_gateway) -
         "/recipes/cart/link",
         "/recipes/generate-menu",
         "/recipes/generate-menu/{task_id}",
+        "/recipes/generate-menu/{task_id}/replace-recipe",
         "/recipes/profile/parameters",
         "/user/profile",
     }

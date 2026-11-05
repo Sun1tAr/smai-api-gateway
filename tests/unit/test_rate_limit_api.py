@@ -13,6 +13,7 @@ from tests.conftest import Recorder
 EXAMPLE_ENV = Path(__file__).resolve().parents[2] / ".env.example"
 TASK = "b1e2c3d4-5678-90ab-cdef-1234567890ab"
 POST = "/recipes/generate-menu"
+REPLACE = f"{POST}/{TASK}/replace-recipe"
 CART = "/recipes/cart"
 CART_LINK = "/recipes/cart/link"
 
@@ -79,6 +80,29 @@ async def test_over_the_limit_gives_429_with_retry_after(upstream: Recorder) -> 
         }
     }
     assert len(upstream.requests) == 3  # отклонённый запрос в MS-4 не ушёл
+
+
+@pytest.mark.parametrize(
+    ("budget", "second_ip"),
+    [
+        ("rate_limit_requests", "203.0.113.9"),
+        ("rate_limit_global_requests", "203.0.113.10"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("first_path", "second_path"), [(POST, REPLACE), (REPLACE, POST)]
+)
+async def test_replace_and_generate_share_both_budgets(
+    upstream: Recorder, budget: str, second_ip: str, first_path: str, second_path: str
+) -> None:
+    app = build(upstream, **{budget: 1})
+    upstream.respond(200, {})
+    async with client(app) as first, client(app, second_ip) as second:
+        assert (await first.post(first_path)).status_code == 200
+        rejected = await second.post(second_path)
+    assert rejected.status_code == 429
+    assert 1 <= int(rejected.headers["retry-after"]) <= 60
+    assert len(upstream.requests) == 1
 
 
 async def test_cart_has_a_separate_client_budget(upstream: Recorder) -> None:

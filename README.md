@@ -17,6 +17,7 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | --- | --- | --- | --- |
 | `POST /recipes/generate-menu` | `POST /generate-menu` | 202 `{"task_id"}`; токен необязателен (SMAI-102) | API-1 (SMAI-A-121) |
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}`; каждый рецепт содержит `recipeId` (UUID MS-4), передаётся без изменений | API-2 (SMAI-A-127) |
+| `POST /recipes/generate-menu/{task_id}/replace-recipe` | `POST /generate-menu/{task_id}/replace-recipe` | 200 `{"recipe":{…}}` с новым рецептом; без аутентификации | API-18 (SMAI-A-359) |
 | `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
 | `POST /recipes/cart` | `POST /recipes/cart` | 200 `{"matches","total","allMatched","unmatchedCount"}` для сохранённого негостевого рецепта, токен необязателен | API-14 (SMAI-A-351) |
 | `POST /recipes/cart/link` | `POST /recipes/cart/link` | 200 `{"link":"<HTTPS URL ВкусВилла>"}`, без аутентификации | API-16 (SMAI-A-355) |
@@ -46,7 +47,7 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 | 404 | `NOT_FOUND` | путь вне белого списка |
 | 405 | `METHOD_NOT_ALLOWED` | неверный метод, заголовок `Allow` |
 | 413 | `PAYLOAD_TOO_LARGE` | тело больше `MAX_REQUEST_BODY_BYTES` |
-| 429 | `RATE_LIMITED` | `POST /recipes/generate-menu`, `POST /recipes/cart`, `POST /recipes/cart/link`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок. Заголовок `Retry-After`, `details.retry_after_seconds` |
+| 429 | `RATE_LIMITED` | API-1 и API-18, `POST /recipes/cart`, `POST /recipes/cart/link`, `POST /auth/register`, `POST /auth/login`: превышен лимит с одного адреса или общий потолок. Заголовок `Retry-After`, `details.retry_after_seconds` |
 | 502 | `EXTERNAL_SERVICE_ERROR` | MS-4 недоступен, оборвал соединение или ответил слишком большим телом |
 | 503 | `EXTERNAL_SERVICE_ERROR` | у gateway исчерпан пул соединений (`details.reason = "pool"`); для `/auth/*` ещё MS-3 занят хэшированием (`details.reason = "busy"`, заголовок `Retry-After`); для `/auth/logout`, `/user/profile` и `/recipes/profile/parameters` недоступен Redis (`details = {"upstream": "redis", "reason": "connect\|timeout\|protocol"}`) |
 | 504 | `EXTERNAL_SERVICE_ERROR` | MS-4 не ответил вовремя; запрос мог быть выполнен |
@@ -56,6 +57,19 @@ MS-4 снимок заменяется экспортом его OpenAPI.
 Ответы 503 самого MS-4 (например, переполненная очередь или недоступный каталог
 ВкусВилла) проходят как есть. Если API-1 вернул 504, не повторяйте запрос
 автоматически: задача могла быть создана.
+
+### Замена рецепта (API-18)
+
+Передай `task_id` готового меню и тело `{"recipeId":"<UUID>"}` с идентификатором
+рецепта из API-2. Ответ содержит новый рецепт в поле `recipe`. При следующем
+запросе API-2 вернёт обновлённое меню. API-18 работает и с гостевыми меню.
+Gateway игнорирует клиентские заголовки аутентификации для этого маршрута.
+
+MS-4 возвращает 400 при ошибке в теле, 404 при отсутствии готового меню или
+рецепта в нём и 500 при ошибке замены или истечении срока ожидания.
+Выставь `UPSTREAM_REPLACE_TIMEOUT_SECONDS` больше `REPLACE_WAIT_SECONDS` в MS-4
+(по умолчанию 125 и 120 секунд соответственно). На выкладке сначала останови
+старый MS-4, примени миграцию и запусти новый MS-4, затем обнови gateway.
 
 ## Локальный запуск
 
@@ -102,6 +116,7 @@ Compose поднимает и локальный Redis (сервис `redis`, т
 | `UPSTREAM_POOL_TIMEOUT_SECONDS` | Ожидание свободного соединения из пула | `2` |
 | `UPSTREAM_TOTAL_TIMEOUT_SECONDS` | Общий дедлайн запроса к MS-4 и MS-2 | `12` |
 | `UPSTREAM_CART_TIMEOUT_SECONDS` | Общий дедлайн и ожидание данных для `POST /recipes/cart`, секунды (больше 0, до 120 включительно) | `40` |
+| `UPSTREAM_REPLACE_TIMEOUT_SECONDS` | Общий дедлайн и ожидание данных для API-18, секунды (больше 0, до 180 включительно) | `125` |
 | `UPSTREAM_MAX_CONNECTIONS` | Размер пула | `100` |
 | `UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | Простой keep-alive; меньше таймаута серверов MS-4 и MS-2 | `2` |
 | `UPSTREAM_MAX_RESPONSE_BYTES` | Предел ответа MS-4 и MS-2 | `2097152` |
@@ -355,11 +370,11 @@ MS-4 доверяет `X-User-Id`, поэтому его нельзя выкат
 
 ## Лимит запросов
 
-Лимит защищает дорогую LLM-генерацию: `POST /recipes/generate-menu` принимает не
-более `RATE_LIMIT_REQUESTS` запросов за `RATE_LIMIT_WINDOW_SECONDS` (10 за 60 с) с
-одного клиента и не более `RATE_LIMIT_GLOBAL_REQUESTS` (100) за то же окно от всех
-вместе. Отдельные лимиты действуют для корзины и аутентификации. Для опроса
-`GET .../{task_id}` лимита нет.
+Запуск генерации (API-1) и замена рецепта (API-18) используют общие лимиты.
+Каждый клиент может отправить `RATE_LIMIT_REQUESTS` запросов за окно
+`RATE_LIMIT_WINDOW_SECONDS` (10 за 60 с). На всех клиентов действует общий
+потолок `RATE_LIMIT_GLOBAL_REQUESTS` (100) за то же окно. Отдельные лимиты
+действуют для корзины и аутентификации. Для опроса `GET .../{task_id}` лимита нет.
 Это отклонение от «без ограничений доступа» в спеках v1, поэтому лимит можно
 выключить: `RATE_LIMIT_ENABLED=false` (метрики лимита при этом остаются, серии нулевые).
 

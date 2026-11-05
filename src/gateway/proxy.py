@@ -18,7 +18,7 @@ from gateway.errors import (
 )
 from gateway.metrics import UpstreamMetrics
 from gateway.policy import Headers
-from gateway.routing import CART_ENDPOINT
+from gateway.routing import CART_ENDPOINT, REPLACE_RECIPE_ENDPOINT
 
 logger = structlog.get_logger()
 
@@ -59,7 +59,10 @@ class UpstreamClient:
         self._upstreams = upstreams
         self._max_response_bytes = settings.upstream_max_response_bytes
         self._total_timeout = settings.upstream_total_timeout_seconds
-        self._cart_timeout = settings.upstream_cart_timeout_seconds
+        self._read_and_total_timeouts = {
+            CART_ENDPOINT: settings.upstream_cart_timeout_seconds,
+            REPLACE_RECIPE_ENDPOINT: settings.upstream_replace_timeout_seconds,
+        }
         if transport is None:
             # retries повторяет только ошибки установки соединения: запрос не ушёл.
             transport = httpx.AsyncHTTPTransport(
@@ -110,7 +113,9 @@ class UpstreamClient:
                 target,
                 headers,
                 body,
-                cart=(method, route) == CART_ENDPOINT,
+                read_and_total_timeout=self._read_and_total_timeouts.get(
+                    (method, route)
+                ),
             )
         except UpstreamFailure as failure:
             self._record_failure(upstream, route, failure, started)
@@ -169,7 +174,7 @@ class UpstreamClient:
         headers: Headers,
         body: bytes,
         *,
-        cart: bool,
+        read_and_total_timeout: float | None,
     ) -> UpstreamResponse:
         url = httpx.URL(self._upstreams[upstream]).copy_with(raw_path=target)
         outgoing = list(headers)
@@ -180,9 +185,9 @@ class UpstreamClient:
             method, url, headers=outgoing, content=body or None
         )
         total_timeout = self._total_timeout
-        if cart:
-            request.extensions["timeout"]["read"] = self._cart_timeout
-            total_timeout = self._cart_timeout
+        if read_and_total_timeout is not None:
+            request.extensions["timeout"]["read"] = read_and_total_timeout
+            total_timeout = read_and_total_timeout
         try:
             async with asyncio.timeout(total_timeout):
                 return await self._send(request, upstream)

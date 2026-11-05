@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     upstream_pool_timeout_seconds: float = Field(default=2, gt=0, le=60)
     upstream_total_timeout_seconds: float = Field(default=12, gt=0, le=180)
     upstream_cart_timeout_seconds: float = Field(default=40, gt=0, le=120)
+    upstream_replace_timeout_seconds: float = Field(default=125, gt=0, le=180)
     upstream_max_connections: int = Field(default=100, ge=1, le=1000)
     upstream_keepalive_expiry_seconds: float = Field(default=2, gt=0, le=60)
     upstream_max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)

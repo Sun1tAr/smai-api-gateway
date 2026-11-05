@@ -5,6 +5,39 @@ from gateway.main import create_app
 from tests.conftest import Recorder
 
 TASK = "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+REPLACE = f"/recipes/generate-menu/{TASK}/replace-recipe"
+
+
+@pytest.mark.parametrize("status", [200, 400, 404, 500])
+async def test_replace_recipe_is_public_and_passes_through(
+    gateway: httpx.AsyncClient, upstream: Recorder, status: int
+) -> None:
+    body = b'{"recipeId":"00000000-0000-4000-8000-000000000001"}'
+    upstream_body = b'{"recipe":{}}' if status == 200 else b'{"error":{}}'
+    upstream.respond(status, upstream_body, {"content-type": "application/json"})
+    response = await gateway.post(
+        REPLACE + "?x=%2F",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer invalid-token",
+            "Cookie": "session=fake",
+            "X-User-Id": "42",
+            "X-Auth-Role": "admin",
+        },
+    )
+    assert response.status_code == status
+    assert response.content == upstream_body
+    (request,) = upstream.requests
+    assert request.method == "POST"
+    assert (
+        request.url.raw_path == f"/generate-menu/{TASK}/replace-recipe?x=%2F".encode()
+    )
+    assert request.content == body
+    assert request.headers["content-type"] == "application/json"
+    assert {"authorization", "cookie", "x-user-id", "x-auth-role"}.isdisjoint(
+        request.headers
+    )
 
 
 async def test_post_is_proxied_with_prefix_stripped(
@@ -82,6 +115,8 @@ async def test_non_json_upstream_error_is_passed_as_is(
         ("POST", "/recipes/generate-menu/"),
         ("GET", f"/recipes/generate-menu/{TASK}/"),
         ("GET", f"/recipes/generate-menu/{TASK}/extra"),
+        ("POST", f"{REPLACE}/"),
+        ("POST", f"/generate-menu/{TASK}/replace-recipe"),
         ("GET", "/recipesfoo/generate-menu"),
         ("GET", "/unknown/generate-menu"),
         ("POST", "//recipes/generate-menu"),
@@ -104,6 +139,7 @@ async def test_paths_outside_the_allowlist_are_404(
         ("DELETE", "/recipes/generate-menu", "POST"),
         ("POST", f"/recipes/generate-menu/{TASK}", "GET"),
         ("PUT", f"/recipes/generate-menu/{TASK}", "GET"),
+        ("GET", REPLACE, "POST"),
     ],
 )
 async def test_wrong_method_is_405_and_never_reaches_upstream(
@@ -133,14 +169,21 @@ async def test_wrong_method_is_405_and_never_reaches_upstream(
         ("%0a", 400, "VALIDATION_ERROR"),
     ],
 )
+@pytest.mark.parametrize(
+    ("method", "suffix"), [("GET", ""), ("POST", "/replace-recipe")]
+)
 async def test_traversal_in_task_id_never_reaches_upstream(
     gateway: httpx.AsyncClient,
     upstream: Recorder,
     task_id: str,
     status: int,
     code: str,
+    method: str,
+    suffix: str,
 ) -> None:
-    response = await gateway.get(f"/recipes/generate-menu/{task_id}")
+    response = await gateway.request(
+        method, f"/recipes/generate-menu/{task_id}{suffix}"
+    )
     assert (response.status_code, response.json()["error"]["code"]) == (status, code)
     assert upstream.requests == []
 
@@ -264,7 +307,7 @@ async def test_edge_guard_runs_on_every_proxied_route(settings, upstream) -> Non
         for r in app.routes
         if isinstance(r, APIRoute) and r.path.startswith("/recipes")
     ]
-    assert len(proxied) == 5
+    assert len(proxied) == 6
     for route in proxied:
         # Токен (если он есть у маршрута) проверяется раньше лимитера.
         assert route.dependant.dependencies[-1].call is edge_guard
