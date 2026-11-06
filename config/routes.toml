@@ -10,6 +10,9 @@ allow = [
     "GET /profile/parameters",
     { endpoint = "POST /cart", upstream_path = "/recipes/cart" },
     { endpoint = "POST /cart/link", upstream_path = "/recipes/cart/link" },
+    { endpoint = "POST /{recipe_id}/like", upstream_path = "/recipes/{recipe_id}/like" },
+    { endpoint = "DELETE /{recipe_id}/like", upstream_path = "/recipes/{recipe_id}/like" },
+    { endpoint = "GET /liked", upstream_path = "/recipes/liked" },
 ]
 
 # Путь словаря на gateway совпадает с путём сервиса, поэтому префикс пустой.

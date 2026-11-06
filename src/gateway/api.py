@@ -52,13 +52,15 @@ _NOT_REACHED = (
     UpstreamBusy,
 )
 _PARAM = re.compile(r"\{[a-z][a-z0-9_]*\}")
-# Маршруты с обязательным токеном. Новый защищённый маршрут (SMAI-102: API-13)
-# добавляется сюда: сервис не стартует, если у него нет зависимости проверки.
+# Gateway проверяет при старте, что у каждого из этих маршрутов есть проверка JWT.
 PROTECTED_ENDPOINTS = frozenset(
     {
         LOGOUT_KEY,
         ("GET", PROFILE_ENDPOINT.gateway_path),
         ("GET", "/recipes/profile/parameters"),
+        ("POST", "/recipes/{recipe_id}/like"),
+        ("DELETE", "/recipes/{recipe_id}/like"),
+        ("GET", "/recipes/liked"),
     }
 )
 # Маршруты API-1 и API-14 должны проверять токен, когда он передан.
@@ -198,37 +200,35 @@ def _protected_503(endpoint: Endpoint, limit: int) -> dict[str, Any]:
             "details": {"upstream": "redis", "reason": "connect"},
         }
     }
+    description = (
+        "Токен нельзя проверить или gateway перегружен. Redis с отозванными "
+        "токенами недоступен (`details.upstream` = `redis`, `reason`: "
+        "`connect`, `timeout`, `protocol`): запрос можно повторить. "
+        "Либо исчерпан пул соединений к сервису (`reason` = `pool`)."
+    )
+    examples = {
+        "redis": {"summary": "Redis недоступен", "value": redis},
+        "pool": {
+            "summary": "Пул соединений исчерпан",
+            "value": _gateway_example(503, endpoint.upstream, limit),
+        },
+    }
+    if endpoint == PROFILE_ENDPOINT:
+        description += " MS-3 занят: `Retry-After`, `reason` = `busy`."
+        examples["busy"] = {
+            "summary": "MS-3 занят (заголовок Retry-After)",
+            "value": {
+                "error": {
+                    "code": "EXTERNAL_SERVICE_ERROR",
+                    "message": UpstreamBusy.message,
+                    "details": {"upstream": "user", "reason": "busy"},
+                }
+            },
+        }
     return {
         **pool,
-        "description": (
-            "Токен нельзя проверить или gateway перегружен. Redis с отозванными "
-            "токенами недоступен (`details.upstream` = `redis`, `reason`: "
-            "`connect`, `timeout`, `protocol`): токен без проверки не "
-            "принимается, запрос можно повторить. Либо исчерпан пул соединений "
-            "к сервису (`reason` = `pool`). Ответ 503 самого сервиса приходит с "
-            "`Retry-After`, `reason` = `busy`."
-        ),
-        "content": {
-            "application/json": {
-                "examples": {
-                    "redis": {"summary": "Redis недоступен", "value": redis},
-                    "busy": {
-                        "summary": "MS-3 занят (заголовок Retry-After)",
-                        "value": {
-                            "error": {
-                                "code": "EXTERNAL_SERVICE_ERROR",
-                                "message": UpstreamBusy.message,
-                                "details": {"upstream": "user", "reason": "busy"},
-                            }
-                        },
-                    },
-                    "pool": {
-                        "summary": "Пул соединений исчерпан",
-                        "value": _gateway_example(503, endpoint.upstream, limit),
-                    },
-                }
-            }
-        },
+        "description": description,
+        "content": {"application/json": {"examples": examples}},
     }
 
 

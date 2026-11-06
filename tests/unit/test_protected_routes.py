@@ -34,6 +34,10 @@ PROFILE = {
 }
 
 
+LIKE = "/recipes/00000000-0000-4000-8000-000000000001/like"
+LIKE_ROUTES = (("POST", LIKE), ("DELETE", LIKE), ("GET", "/recipes/liked"))
+
+
 class UserService:
     """Подменяет MS-3: отвечает заданным статусом и телом, запоминает запросы."""
 
@@ -421,7 +425,11 @@ async def test_logout_revokes_the_token(gateway, app, fake_redis, user) -> None:
 async def test_revoked_token_is_rejected_everywhere(gateway, app, user) -> None:
     headers = bearer(app)
     await gateway.post("/auth/logout", headers=headers)
-    for method, path in (("GET", "/user/profile"), ("POST", "/auth/logout")):
+    for method, path in (
+        ("GET", "/user/profile"),
+        ("POST", "/auth/logout"),
+        *LIKE_ROUTES,
+    ):
         response = await gateway.request(method, path, headers=headers)
         assert response.status_code == 401
         assert response.json() == UNAUTHORIZED
@@ -518,7 +526,11 @@ async def test_redis_failure_rejects_protected_routes_with_503(
     )
     async with client_for(app) as client:
         headers = bearer(app)
-        for method, path in (("GET", "/user/profile"), ("POST", "/auth/logout")):
+        for method, path in (
+            ("GET", "/user/profile"),
+            ("POST", "/auth/logout"),
+            *LIKE_ROUTES,
+        ):
             response = await client.request(method, path, headers=headers)
             assert response.status_code == 503
             assert response.json() == {
@@ -688,12 +700,59 @@ def test_startup_fails_if_a_protected_route_is_not_registered(
         build(user, fake_redis)
 
 
-def test_protected_endpoints_are_logout_profile_and_saved_parameters() -> None:
+def test_protected_endpoints() -> None:
     assert api.PROTECTED_ENDPOINTS == {
         ("POST", "/auth/logout"),
         ("GET", "/user/profile"),
         ("GET", "/recipes/profile/parameters"),
+        ("POST", "/recipes/{recipe_id}/like"),
+        ("DELETE", "/recipes/{recipe_id}/like"),
+        ("GET", "/recipes/liked"),
     }
+
+
+@pytest.mark.parametrize("method, path", LIKE_ROUTES)
+@pytest.mark.parametrize("authorization", [None, "Bearer invalid.jwt.token"])
+async def test_likes_reject_missing_or_invalid_tokens(
+    gateway, user, method, path, authorization
+):
+    headers = {"X-User-Id": "42"}
+    if authorization:
+        headers["Authorization"] = authorization
+    response = await gateway.request(method, path, headers=headers)
+    assert response.status_code == 401
+    assert response.json() == UNAUTHORIZED
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert user.requests == []
+
+
+@pytest.mark.parametrize("method, path", LIKE_ROUTES)
+async def test_likes_forward_only_verified_identity(gateway, app, user, method, path):
+    body = {"recipes": []} if method == "GET" else {"success": True}
+    user.respond(200, body)
+    headers = [*bearer(app, 7).items(), ("X-User-Id", "1"), ("x-user-id", "2")]
+    response = await gateway.request(method, path, headers=headers)
+    assert (response.status_code, response.json()) == (200, body)
+    (sent,) = user.requests
+    assert (sent.method, sent.url.host, sent.url.path) == (method, "recipes", path)
+    assert sent.headers.get_list("x-user-id") == ["7"]
+    assert "authorization" not in sent.headers
+
+
+@pytest.mark.parametrize(
+    "method, status, code",
+    [
+        ("POST", 404, "NOT_FOUND"),
+        ("DELETE", 404, "NOT_FOUND"),
+        ("POST", 409, "CONFLICT"),
+    ],
+)
+async def test_likes_forward_upstream_errors(gateway, app, user, method, status, code):
+    body = {"error": {"code": code, "message": "Example", "details": {}}}
+    user.respond(status, body)
+    response = await gateway.request(method, LIKE, headers=bearer(app))
+    assert (response.status_code, response.json()) == (status, body)
+    assert len(user.requests) == 1
 
 
 def test_optional_auth_endpoints_are_generate_menu_and_cart() -> None:
