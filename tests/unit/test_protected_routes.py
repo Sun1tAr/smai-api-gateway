@@ -36,6 +36,8 @@ PROFILE = {
 
 LIKE = "/recipes/00000000-0000-4000-8000-000000000001/like"
 LIKE_ROUTES = (("POST", LIKE), ("DELETE", LIKE), ("GET", "/recipes/liked"))
+MENU_HISTORY = "/recipes/profile/menus"
+RECIPE_PROTECTED_ROUTES = (*LIKE_ROUTES, ("GET", MENU_HISTORY))
 
 
 class UserService:
@@ -428,7 +430,7 @@ async def test_revoked_token_is_rejected_everywhere(gateway, app, user) -> None:
     for method, path in (
         ("GET", "/user/profile"),
         ("POST", "/auth/logout"),
-        *LIKE_ROUTES,
+        *RECIPE_PROTECTED_ROUTES,
     ):
         response = await gateway.request(method, path, headers=headers)
         assert response.status_code == 401
@@ -529,7 +531,7 @@ async def test_redis_failure_rejects_protected_routes_with_503(
         for method, path in (
             ("GET", "/user/profile"),
             ("POST", "/auth/logout"),
-            *LIKE_ROUTES,
+            *RECIPE_PROTECTED_ROUTES,
         ):
             response = await client.request(method, path, headers=headers)
             assert response.status_code == 503
@@ -705,15 +707,16 @@ def test_protected_endpoints() -> None:
         ("POST", "/auth/logout"),
         ("GET", "/user/profile"),
         ("GET", "/recipes/profile/parameters"),
+        ("GET", MENU_HISTORY),
         ("POST", "/recipes/{recipe_id}/like"),
         ("DELETE", "/recipes/{recipe_id}/like"),
         ("GET", "/recipes/liked"),
     }
 
 
-@pytest.mark.parametrize("method, path", LIKE_ROUTES)
+@pytest.mark.parametrize("method, path", RECIPE_PROTECTED_ROUTES)
 @pytest.mark.parametrize("authorization", [None, "Bearer invalid.jwt.token"])
-async def test_likes_reject_missing_or_invalid_tokens(
+async def test_recipe_routes_reject_missing_or_invalid_tokens(
     gateway, user, method, path, authorization
 ):
     headers = {"X-User-Id": "42"}
@@ -726,15 +729,25 @@ async def test_likes_reject_missing_or_invalid_tokens(
     assert user.requests == []
 
 
-@pytest.mark.parametrize("method, path", LIKE_ROUTES)
-async def test_likes_forward_only_verified_identity(gateway, app, user, method, path):
-    body = {"recipes": []} if method == "GET" else {"success": True}
+@pytest.mark.parametrize("method, path", RECIPE_PROTECTED_ROUTES)
+async def test_recipe_routes_forward_only_verified_identity(
+    gateway, app, user, method, path
+):
+    if path == MENU_HISTORY:
+        upstream_path, body = "/profile/menus", {"menus": []}
+    else:
+        upstream_path = path
+        body = {"recipes": []} if method == "GET" else {"success": True}
     user.respond(200, body)
     headers = [*bearer(app, 7).items(), ("X-User-Id", "1"), ("x-user-id", "2")]
     response = await gateway.request(method, path, headers=headers)
     assert (response.status_code, response.json()) == (200, body)
     (sent,) = user.requests
-    assert (sent.method, sent.url.host, sent.url.path) == (method, "recipes", path)
+    assert (sent.method, sent.url.host, sent.url.path) == (
+        method,
+        "recipes",
+        upstream_path,
+    )
     assert sent.headers.get_list("x-user-id") == ["7"]
     assert "authorization" not in sent.headers
 
