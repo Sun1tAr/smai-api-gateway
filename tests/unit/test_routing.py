@@ -113,6 +113,7 @@ def test_default_routes_file_is_valid() -> None:
         "/recipes/generate-menu/{task_id}",
         "/recipes/generate-menu/{task_id}/replace-recipe",
         "/recipes/profile/parameters",
+        "/recipes/profile/menus",
         "/recipes/cart",
         "/recipes/cart/link",
         "/recipes/{recipe_id}/like",
@@ -124,6 +125,7 @@ def test_default_routes_file_is_valid() -> None:
         "GET",
         "POST",
         "GET",
+        "GET",
         "POST",
         "POST",
         "POST",
@@ -131,7 +133,8 @@ def test_default_routes_file_is_valid() -> None:
         "GET",
     ]
     assert [e.gateway_path for e in routes[1].endpoints] == ["/dictionaries"]
-    cart, link, like, unlike, liked = routes[0].endpoints[-5:]
+    history, cart, link, like, unlike, liked = routes[0].endpoints[-6:]
+    assert history.upstream_path == "/profile/menus"
     assert like.upstream_path == unlike.upstream_path == "/recipes/{recipe_id}/like"
     assert liked.upstream_path == "/recipes/liked"
     assert upstream_target(cart, b"/recipes/cart", b"a=%2F") == b"/recipes/cart?a=%2F"

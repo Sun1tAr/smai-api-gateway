@@ -58,6 +58,7 @@ PROTECTED_ENDPOINTS = frozenset(
         LOGOUT_KEY,
         ("GET", PROFILE_ENDPOINT.gateway_path),
         ("GET", "/recipes/profile/parameters"),
+        ("GET", "/recipes/profile/menus"),
         ("POST", "/recipes/{recipe_id}/like"),
         ("DELETE", "/recipes/{recipe_id}/like"),
         ("GET", "/recipes/liked"),

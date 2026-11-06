@@ -8,6 +8,7 @@ allow = [
     "GET /generate-menu/{task_id}",
     "POST /generate-menu/{task_id}/replace-recipe",
     "GET /profile/parameters",
+    "GET /profile/menus",
     { endpoint = "POST /cart", upstream_path = "/recipes/cart" },
     { endpoint = "POST /cart/link", upstream_path = "/recipes/cart/link" },
     { endpoint = "POST /{recipe_id}/like", upstream_path = "/recipes/{recipe_id}/like" },

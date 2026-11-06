@@ -19,6 +19,7 @@ gateway вызывает MS-3 и сам выдаёт JWT (см. «Аутенти
 | `GET /recipes/generate-menu/{task_id}` | `GET /generate-menu/{task_id}` | 200 `{"status","menu","error"}`; каждый рецепт содержит `recipeId` (UUID MS-4), передаётся без изменений | API-2 (SMAI-A-127) |
 | `POST /recipes/generate-menu/{task_id}/replace-recipe` | `POST /generate-menu/{task_id}/replace-recipe` | 200 `{"recipe":{…}}` с новым рецептом; без аутентификации | API-18 (SMAI-A-359) |
 | `GET /recipes/profile/parameters` | `GET /profile/parameters` | 200 `{"habits","diet","allergies","kitchenTools"}`, токен обязателен (SMAI-102) | API-13 (SMAI-A-274) |
+| `GET /recipes/profile/menus` | `GET /profile/menus` | 200 `{"menus":[…]}` с историей готовых меню пользователя; токен обязателен | API-22 (SMAI-A-367) |
 | `POST /recipes/cart` | `POST /recipes/cart` | 200 `{"matches","total","allMatched","unmatchedCount"}` для сохранённого негостевого рецепта, токен необязателен | API-14 (SMAI-A-351) |
 | `POST /recipes/cart/link` | `POST /recipes/cart/link` | 200 `{"link":"<HTTPS URL ВкусВилла>"}`, без аутентификации | API-16 (SMAI-A-355) |
 | `POST /recipes/{recipe_id}/like` | Тот же путь | 200 `{"success":true}`; токен обязателен | API-19 (SMAI-A-361) |
@@ -227,7 +228,8 @@ Linux-хосте пока не проверена (на Docker Desktop for Mac �
 ### Проверка токена, выход и профиль (SMAI-101)
 
 **Защищённые маршруты** — `POST /auth/logout`, `GET /user/profile`,
-`GET /recipes/profile/parameters` (API-13) и три маршрута лайков (API-19–21).
+`GET /recipes/profile/parameters` (API-13), `GET /recipes/profile/menus` (API-22)
+и три маршрута лайков (API-19–21).
 В коде их перечисляет `PROTECTED_ENDPOINTS` (`src/gateway/api.py`). Если у маршрута нет
 зависимости проверки токена или он не зарегистрирован, gateway не стартует. Остальные
 маршруты работают без токена; `POST /recipes/generate-menu` принимает токен
@@ -277,6 +279,12 @@ gateway стартует и при мёртвом Redis, соединение о
 параметры последней готовой генерации пользователя, при её отсутствии пустые списки и
 `diet: null` (404 нет). В `/docs` маршрут с обязательным `bearerAuth` и ответами 200,
 401, 500, 502, 503, 504.
+
+**`GET /recipes/profile/menus` (API-22).** Gateway передаёт в MS-4 `X-User-Id` из
+токена. MS-4 возвращает всю историю готовых меню пользователя с текущим составом
+или `{"menus":[]}`. Если тело ответа превышает `UPSTREAM_MAX_RESPONSE_BYTES`
+(по умолчанию 2 МиБ), gateway возвращает 502 с
+`details.reason = "response_too_large"`.
 
 **Необязательный токен на `POST /recipes/generate-menu` (API-1).** Маршрут перечислен в
 `OPTIONAL_AUTH_ENDPOINTS` (`src/gateway/api.py`); без зависимости `optional_user`

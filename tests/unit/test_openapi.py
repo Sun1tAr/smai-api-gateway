@@ -16,11 +16,13 @@ API2 = "/recipes/generate-menu/{task_id}"
 API18 = f"{API2}/replace-recipe"
 LIKE = "/recipes/{recipe_id}/like"
 LIKED = "/recipes/liked"
+API22 = "/recipes/profile/menus"
 OPERATIONS = [
     (API18, "post", "/generate-menu/{task_id}/replace-recipe"),
     ("/recipes/generate-menu", "post", "/generate-menu"),
     ("/recipes/generate-menu/{task_id}", "get", "/generate-menu/{task_id}"),
     ("/recipes/profile/parameters", "get", "/profile/parameters"),
+    (API22, "get", "/profile/menus"),
     ("/recipes/cart", "post", "/recipes/cart"),
     ("/recipes/cart/link", "post", "/recipes/cart/link"),
     (LIKE, "post", LIKE),
@@ -42,6 +44,7 @@ GATEWAY_CODES = {
     },
     ("delete", LIKE): {"200", "400", "401", "404", "500", "502", "503", "504"},
     ("get", LIKED): {"200", "400", "401", "500", "502", "503", "504"},
+    ("get", API22): {"200", "400", "401", "500", "502", "503", "504"},
     ("post", API18): {"200", "400", "404", "413", "429", "500", "502", "503", "504"},
     ("post", "/recipes/generate-menu"): {
         "202",
@@ -252,8 +255,7 @@ async def test_gateway_error_examples_carry_the_right_reason(
     responses = schema["paths"][path][method]["responses"]
     for status, reason in (("502", "connect"), ("503", "pool"), ("504", "timeout")):
         media = responses[status]["content"]["application/json"]
-        # У защищённых маршрутов 503 несёт несколько примеров (Redis, пул).
-        example = media.get("example") or media["examples"]["pool"]["value"]
+        example = media.get("example") or media["examples"][reason]["value"]
         assert example["error"]["details"] == {"upstream": "recipes", "reason": reason}
     gateway_400 = responses["400"]["content"]["application/json"]
     example = (
@@ -402,9 +404,9 @@ def test_api16_documents_a_public_cart_link_and_item_limits(schema: dict) -> Non
 
 
 @pytest.mark.parametrize(
-    "path, method", [(LIKE, "post"), (LIKE, "delete"), (LIKED, "get")]
+    "path, method", [(LIKE, "post"), (LIKE, "delete"), (LIKED, "get"), (API22, "get")]
 )
-def test_recipe_likes_document_bearer_auth_and_gateway_failures(schema, path, method):
+def test_protected_recipe_routes_document_auth_and_failures(schema, path, method):
     operation = schema["paths"][path][method]
     assert operation["security"] == [{"bearerAuth": []}]
     parameters = operation.get("parameters", [])
@@ -427,3 +429,38 @@ def test_recipe_likes_document_bearer_auth_and_gateway_failures(schema, path, me
     assert set(unavailable["examples"]) == {"redis", "pool"}
     redis = unavailable["examples"]["redis"]["value"]["error"]
     assert redis["details"] == {"upstream": "redis", "reason": "connect"}
+
+
+def test_api22_documents_menu_history(schema: dict) -> None:
+    operation = schema["paths"][API22]["get"]
+    assert "x-user-id" not in json.dumps(operation).lower()
+    for status, response in operation["responses"].items():
+        media = response["content"]["application/json"]
+        for _, example_schema, value in _media_examples(status, media):
+            jsonschema.Draft202012Validator(
+                {**example_schema, "components": schema["components"]},
+                format_checker=jsonschema.FormatChecker(),
+            ).validate(value)
+    ok = operation["responses"]["200"]["content"]["application/json"]
+    menu = ok["schema"]["properties"]["menus"]["items"]
+    assert set(menu["properties"]) == {"menuId", "createdAt", "recipes"}
+    assert menu["properties"]["menuId"]["format"] == "uuid"
+    assert menu["properties"]["createdAt"]["format"] == "date-time"
+    recipe = menu["properties"]["recipes"]["items"]
+    assert set(recipe["properties"]) == {"recipeId", "name", "calories", "cookingTime"}
+    assert recipe["properties"]["recipeId"]["format"] == "uuid"
+    values = [example["value"] for example in ok["examples"].values()]
+    assert {"menus": []} in values
+    assert any(value["menus"] for value in values)
+
+
+def test_api22_documents_the_gateway_response_size_limit(schema: dict) -> None:
+    response = schema["paths"][API22]["get"]["responses"]["502"]
+    examples = response["content"]["application/json"]["examples"]
+    assert examples["response_too_large"]["value"] == {
+        "error": {
+            "code": "EXTERNAL_SERVICE_ERROR",
+            "message": "Upstream response exceeds the allowed size",
+            "details": {"upstream": "recipes", "reason": "response_too_large"},
+        }
+    }
