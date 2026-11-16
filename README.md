@@ -282,7 +282,9 @@ gateway стартует и при мёртвом Redis, соединение о
 
 **`GET /recipes/profile/menus` (API-22).** Gateway передаёт в MS-4 `X-User-Id` из
 токена. MS-4 возвращает всю историю готовых меню пользователя с текущим составом
-или `{"menus":[]}`. Если тело ответа превышает `UPSTREAM_MAX_RESPONSE_BYTES`
+или `{"menus":[]}`. Каждый рецепт содержит сохранённые КБЖУ одной порции в
+`nutrition`; основная калорийность — `nutrition.calories`, прежнее поле
+`calories` сохранено. Если тело ответа превышает `UPSTREAM_MAX_RESPONSE_BYTES`
 (по умолчанию 2 МиБ), gateway возвращает 502 с
 `details.reason = "response_too_large"`.
 

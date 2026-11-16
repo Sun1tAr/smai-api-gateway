@@ -1078,7 +1078,7 @@
     "/profile/menus": {
       "get": {
         "summary": "История меню пользователя (API-22)",
-        "description": "Возвращает готовые меню пользователя, указанного в токене. Меню отсортированы по убыванию времени создания задачи, при равном времени — по убыванию UUID задачи. В составе меню отображаются текущие рецепты с учётом замен. При отсутствии готовых меню список пуст.\n\nНужен `Authorization: Bearer <jwt>`.",
+        "description": "Возвращает готовые меню пользователя, указанного в токене. Меню отсортированы по убыванию времени создания задачи, при равном времени — по убыванию UUID задачи. В составе меню отображаются текущие рецепты с учётом замен. При отсутствии готовых меню список пуст. Рецепты содержат сохранённые КБЖУ одной порции в `nutrition`; основная калорийность — `nutrition.calories`.\n\nНужен `Authorization: Bearer <jwt>`.",
         "responses": {
           "200": {
             "description": "Список готовых меню.",
@@ -1118,12 +1118,40 @@
                                 "calories": {
                                   "type": "number",
                                   "title": "Calories",
-                                  "description": "Калорийность одной порции, ккал."
+                                  "description": "Калорийность одной порции, ккал, как её вернула модель. Может расходиться с `nutrition.calories`; основным считайте `nutrition.calories`."
                                 },
                                 "cookingTime": {
                                   "type": "number",
                                   "title": "Cookingtime",
                                   "description": "Время приготовления, минут."
+                                },
+                                "nutrition": {
+                                  "type": "object",
+                                  "required": [
+                                    "calories",
+                                    "proteins",
+                                    "fats",
+                                    "carbohydrates"
+                                  ],
+                                  "properties": {
+                                    "calories": {
+                                      "type": "number",
+                                      "description": "Калорийность одной порции, ккал."
+                                    },
+                                    "proteins": {
+                                      "type": "number",
+                                      "description": "Белки одной порции, г."
+                                    },
+                                    "fats": {
+                                      "type": "number",
+                                      "description": "Жиры одной порции, г."
+                                    },
+                                    "carbohydrates": {
+                                      "type": "number",
+                                      "description": "Углеводы одной порции, г."
+                                    }
+                                  },
+                                  "description": "КБЖУ одной порции."
                                 }
                               },
                               "type": "object",
@@ -1131,7 +1159,8 @@
                                 "recipeId",
                                 "name",
                                 "calories",
-                                "cookingTime"
+                                "cookingTime",
+                                "nutrition"
                               ],
                               "title": "MenuHistoryRecipeResponse"
                             },
@@ -1172,7 +1201,13 @@
                               "recipeId": "b1e2c3d4-5678-90ab-cdef-1234567890ab",
                               "name": "Омлет с томатами",
                               "calories": 345.5,
-                              "cookingTime": 25
+                              "cookingTime": 25,
+                              "nutrition": {
+                                "calories": 340,
+                                "proteins": 20.5,
+                                "fats": 24,
+                                "carbohydrates": 10.5
+                              }
                             }
                           ]
                         }
