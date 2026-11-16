@@ -447,8 +447,23 @@ def test_api22_documents_menu_history(schema: dict) -> None:
     assert menu["properties"]["menuId"]["format"] == "uuid"
     assert menu["properties"]["createdAt"]["format"] == "date-time"
     recipe = menu["properties"]["recipes"]["items"]
-    assert set(recipe["properties"]) == {"recipeId", "name", "calories", "cookingTime"}
+    assert set(recipe["properties"]) == {
+        "recipeId",
+        "name",
+        "calories",
+        "nutrition",
+        "cookingTime",
+    }
     assert recipe["properties"]["recipeId"]["format"] == "uuid"
+    assert "nutrition" in recipe["required"]
+    nutrition = recipe["properties"]["nutrition"]
+    assert set(nutrition["required"]) == {
+        "calories",
+        "proteins",
+        "fats",
+        "carbohydrates",
+    }
+    assert all(field["type"] == "number" for field in nutrition["properties"].values())
     values = [example["value"] for example in ok["examples"].values()]
     assert {"menus": []} in values
     assert any(value["menus"] for value in values)
