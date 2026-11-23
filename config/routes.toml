@@ -1,0 +1,26 @@
+# Белый список путей, доступных клиенту. Всё, чего здесь нет, gateway не пересылает.
+# Адрес сервиса задаётся переменной окружения UPSTREAM_<NAME>_URL.
+[[route]]
+prefix = "recipes"
+upstream = "recipes"
+allow = [
+    "POST /generate-menu",
+    "GET /generate-menu/{task_id}",
+    "POST /generate-menu/{task_id}/replace-recipe",
+    "GET /profile/parameters",
+    "GET /profile/menus",
+    { endpoint = "POST /cart", upstream_path = "/recipes/cart" },
+    { endpoint = "POST /cart/link", upstream_path = "/recipes/cart/link" },
+    { endpoint = "POST /{recipe_id}/like", upstream_path = "/recipes/{recipe_id}/like" },
+    { endpoint = "DELETE /{recipe_id}/like", upstream_path = "/recipes/{recipe_id}/like" },
+    { endpoint = "GET /liked", upstream_path = "/recipes/liked" },
+]
+
+# Путь словаря на gateway совпадает с путём сервиса, поэтому префикс пустой.
+# Пустой префикс может быть только у одного маршрута (дубликат prefix = "" — ошибка).
+[[route]]
+prefix = ""
+upstream = "dictionary"
+allow = [
+    "GET /dictionaries",
+]

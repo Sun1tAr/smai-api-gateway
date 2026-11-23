@@ -1,0 +1,91 @@
+# Сеть smai общая для всех сервисов контура: gateway находит MS-4 по имени recipes.
+# Один раз: docker network create smai
+services:
+  gateway:
+    build:
+      context: .
+      target: production
+    # Остальные настройки из .env.example (таймауты, лимиты) подхватываются из .env.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      UPSTREAM_RECIPES_URL: ${UPSTREAM_RECIPES_URL:?Set UPSTREAM_RECIPES_URL}
+      UPSTREAM_DICTIONARY_URL: ${UPSTREAM_DICTIONARY_URL:?Set UPSTREAM_DICTIONARY_URL}
+      UPSTREAM_USER_URL: ${UPSTREAM_USER_URL:?Set UPSTREAM_USER_URL}
+      # Список отозванных токенов; пароль, если он есть, только внутри URL.
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
+      # Приватный ключ подписи JWT монтируется файлом (секрет Compose), только на чтение.
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    secrets:
+      - jwt_private_key
+    ports:
+      - "127.0.0.1:${GATEWAY_HTTP_PORT:-8080}:8000"
+    networks:
+      - smai
+
+  # Локальный Redis для отозванных токенов. В контуре Redis ведёт DevOps: только сеть
+  # smai, appendonly yes, appendfsync everysec, noeviction (иначе отзыв токена пропадёт).
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - smai
+
+  # Заглушка MS-4: docker compose --profile stub up --build
+  recipes-stub:
+    profiles: [stub]
+    build:
+      context: .
+      target: test
+    command: ["uvicorn", "tests.stubs.recipes_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      smai:
+        aliases:
+          - recipes
+
+  # Заглушка MS-3: docker compose --profile stub up --build
+  user-stub:
+    profiles: [stub]
+    build:
+      context: .
+      target: test
+    command: ["uvicorn", "tests.stubs.user_stub:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    networks:
+      smai:
+        aliases:
+          - user
+
+volumes:
+  redis-data:
+
+# PEM-файл ключа ES256 (P-256) без пароля: путь на хосте задаёт JWT_PRIVATE_KEY_PATH.
+# Файл не коммитить и не класть в образ; владелец UID 10001, права 0400.
+secrets:
+  jwt_private_key:
+    file: ${JWT_PRIVATE_KEY_PATH:?Set JWT_PRIVATE_KEY_PATH to the JWT private key PEM file}
+
+networks:
+  smai:
+    external: true

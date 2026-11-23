@@ -1,0 +1,3048 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "smai-api-receipes (контракт MS-4, снимок)",
+    "version": "v1",
+    "description": "Снимок контракта API-1 (SMAI-A-121) и API-2 (SMAI-A-127). Заменяется экспортом OpenAPI из MS-4, когда он готов (SMAI-55); API-1 с необязательным токеном и API-13 (SMAI-A-306, SMAI-102). API-14 (SMAI-A-351, SMAI-118). API-18 (SMAI-A-359, SMAI-120)."
+  },
+  "paths": {
+    "/generate-menu": {
+      "post": {
+        "summary": "Запуск генерации меню (API-1)",
+        "description": "Создаёт задачу генерации недельного меню и сразу возвращает её идентификатор. Сама генерация выполняется в фоне; результат запрашивается через `GET /recipes/generate-menu/{task_id}`. Если ответ потерян (например, 504), повторять запрос автоматически нельзя: задача могла быть создана, а повтор запустит вторую генерацию.\n\nТокен необязателен. Без заголовка `Authorization` запрос гостевой: меню создаётся как раньше, параметры ни за кем не сохраняются. С действительным токеном (`Authorization: Bearer <jwt>`) задача создаётся от имени пользователя, и после готовности меню его параметры возвращает `GET /recipes/profile/parameters`. Недействительный токен (подпись, срок, формат, отзыв) даёт 401, а не гостевой режим. Исключение: если хранилище отзывов (Redis) недоступно, отзыв проверить нельзя, и запрос с токеном обрабатывается как гостевой: меню создаётся, параметры не сохраняются. В этом случае отозванный токен тоже идёт как гостевой, а не получает 401; неверная подпись, истёкший срок и неверный формат дают 401 и при сбое Redis.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "peopleCount",
+                  "weeklyBudget"
+                ],
+                "properties": {
+                  "peopleCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Количество человек."
+                  },
+                  "weeklyBudget": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000,
+                    "description": "Недельный бюджет в рублях, не более двух знаков после запятой."
+                  }
+                }
+              },
+              "example": {
+                "peopleCount": 4,
+                "weeklyBudget": 5000
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Задача создана.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "task_id"
+                  ],
+                  "properties": {
+                    "task_id": {
+                      "type": "string",
+                      "description": "Идентификатор задачи."
+                    }
+                  }
+                },
+                "example": {
+                  "task_id": "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры запроса.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request is invalid",
+                    "details": {
+                      "fields": [
+                        {
+                          "loc": [
+                            "body",
+                            "peopleCount"
+                          ],
+                          "type": "int_parsing"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен передан, но недействителен: неверная подпись, истёк срок, неверный формат заголовка или токен отозван через `POST /auth/logout`. Причина в ответе не раскрывается. Без токена запрос не отклоняется. В ответе `WWW-Authenticate: Bearer`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка создания задачи.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/generate-menu/{task_id}": {
+      "get": {
+        "summary": "Получение результата генерации (API-2)",
+        "description": "Возвращает статус задачи; при `done` также меню. Клиент опрашивает этот эндпоинт, пока статус не станет `done` или `failed`. Неизвестный или некорректный `task_id` даёт 404.",
+        "responses": {
+          "200": {
+            "description": "Статус задачи.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "menu",
+                    "error"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "done",
+                        "failed"
+                      ]
+                    },
+                    "menu": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "Результат генерации; null, если status не done.",
+                      "properties": {
+                        "recipes": {
+                          "type": "array",
+                          "minItems": 3,
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "recipeId",
+                              "name",
+                              "ingredients",
+                              "calories",
+                              "nutrition",
+                              "cookingTime",
+                              "instructions"
+                            ],
+                            "properties": {
+                              "recipeId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "description": "Идентификатор сохранённого рецепта."
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "ingredients": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "name",
+                                    "quantity",
+                                    "unit"
+                                  ],
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "quantity": {
+                                      "type": "number"
+                                    },
+                                    "unit": {
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              },
+                              "calories": {
+                                "type": "number",
+                                "description": "Калорийность, ккал."
+                              },
+                              "nutrition": {
+                                "type": "object",
+                                "required": [
+                                  "calories",
+                                  "proteins",
+                                  "fats",
+                                  "carbohydrates"
+                                ],
+                                "properties": {
+                                  "calories": {
+                                    "type": "number"
+                                  },
+                                  "proteins": {
+                                    "type": "number"
+                                  },
+                                  "fats": {
+                                    "type": "number"
+                                  },
+                                  "carbohydrates": {
+                                    "type": "number"
+                                  }
+                                }
+                              },
+                              "cookingTime": {
+                                "type": "number",
+                                "description": "Время готовки, мин."
+                              },
+                              "instructions": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "photo": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "description": "Ссылка на фотографию."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Описание ошибки; null, если status не failed."
+                    }
+                  }
+                },
+                "examples": {
+                  "pending": {
+                    "summary": "Задача в очереди",
+                    "value": {
+                      "status": "pending",
+                      "menu": null,
+                      "error": null
+                    }
+                  },
+                  "in_progress": {
+                    "summary": "Задача выполняется",
+                    "value": {
+                      "status": "in_progress",
+                      "menu": null,
+                      "error": null
+                    }
+                  },
+                  "done": {
+                    "summary": "Задача завершена",
+                    "value": {
+                      "status": "done",
+                      "menu": {
+                        "recipes": [
+                          {
+                            "name": "Овсяная каша с ягодами",
+                            "ingredients": [
+                              {
+                                "name": "Овсяные хлопья",
+                                "quantity": 200,
+                                "unit": "г"
+                              },
+                              {
+                                "name": "Молоко",
+                                "quantity": 500,
+                                "unit": "мл"
+                              },
+                              {
+                                "name": "Ягоды",
+                                "quantity": 150,
+                                "unit": "г"
+                              }
+                            ],
+                            "calories": 320,
+                            "nutrition": {
+                              "calories": 320,
+                              "proteins": 12,
+                              "fats": 8,
+                              "carbohydrates": 50
+                            },
+                            "cookingTime": 15,
+                            "instructions": [
+                              "Вскипятить молоко.",
+                              "Добавить овсяные хлопья и варить 5 минут.",
+                              "Добавить ягоды и подать."
+                            ],
+                            "photo": "https://example.com/photos/oatmeal.jpg",
+                            "recipeId": "00000000-0000-4000-8000-000000000001"
+                          },
+                          {
+                            "name": "Куриная грудка с гречкой",
+                            "ingredients": [
+                              {
+                                "name": "Куриная грудка",
+                                "quantity": 300,
+                                "unit": "г"
+                              },
+                              {
+                                "name": "Гречка",
+                                "quantity": 150,
+                                "unit": "г"
+                              },
+                              {
+                                "name": "Лук",
+                                "quantity": 1,
+                                "unit": "шт"
+                              }
+                            ],
+                            "calories": 520,
+                            "nutrition": {
+                              "calories": 520,
+                              "proteins": 45,
+                              "fats": 9,
+                              "carbohydrates": 62
+                            },
+                            "cookingTime": 35,
+                            "instructions": [
+                              "Отварить гречку до готовности.",
+                              "Нарезать и обжарить куриную грудку с луком.",
+                              "Подать курицу с гречкой."
+                            ],
+                            "photo": "https://example.com/photos/chicken-buckwheat.jpg",
+                            "recipeId": "00000000-0000-4000-8000-000000000002"
+                          },
+                          {
+                            "name": "Овощной суп с чечевицей",
+                            "ingredients": [
+                              {
+                                "name": "Чечевица",
+                                "quantity": 100,
+                                "unit": "г"
+                              },
+                              {
+                                "name": "Морковь",
+                                "quantity": 2,
+                                "unit": "шт"
+                              },
+                              {
+                                "name": "Картофель",
+                                "quantity": 3,
+                                "unit": "шт"
+                              }
+                            ],
+                            "calories": 280,
+                            "nutrition": {
+                              "calories": 280,
+                              "proteins": 14,
+                              "fats": 4,
+                              "carbohydrates": 48
+                            },
+                            "cookingTime": 40,
+                            "instructions": [
+                              "Нарезать овощи.",
+                              "Варить чечевицу с овощами 25 минут.",
+                              "Посолить и подать."
+                            ],
+                            "photo": null,
+                            "recipeId": "00000000-0000-4000-8000-000000000003"
+                          }
+                        ]
+                      },
+                      "error": null
+                    }
+                  },
+                  "failed": {
+                    "summary": "Задача завершилась ошибкой",
+                    "value": {
+                      "status": "failed",
+                      "menu": null,
+                      "error": "Neurocore timeout"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Задача не найдена.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Generation task not found",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка при получении статуса.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Идентификатор задачи, полученный от API-1."
+          }
+        ]
+      }
+    },
+    "/generate-menu/{task_id}/replace-recipe": {
+      "post": {
+        "summary": "Замена рецепта в готовом меню (API-18)",
+        "description": "Заменяет выбранный рецепт в готовом меню и возвращает новый рецепт. Передай идентификатор задачи от API-1 и `recipeId` из результата API-2. После успеха API-2 возвращает меню с новым рецептом. Маршрут публичный. Запуск генерации и замена рецепта используют общие лимиты gateway. Срок ожидания MS-4 включает очередь.",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Идентификатор задачи, полученный от API-1.",
+            "example": "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipeId"
+                ],
+                "properties": {
+                  "recipeId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Идентификатор заменяемого рецепта из API-2."
+                  }
+                }
+              },
+              "example": {
+                "recipeId": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Рецепт заменён. Возвращается новый рецепт.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recipe"
+                  ],
+                  "properties": {
+                    "recipe": {
+                      "type": "object",
+                      "required": [
+                        "recipeId",
+                        "name",
+                        "ingredients",
+                        "calories",
+                        "nutrition",
+                        "cookingTime",
+                        "instructions"
+                      ],
+                      "properties": {
+                        "recipeId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Идентификатор сохранённого рецепта."
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "ingredients": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "name",
+                              "quantity",
+                              "unit"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "quantity": {
+                                "type": "number"
+                              },
+                              "unit": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "calories": {
+                          "type": "number",
+                          "description": "Калорийность, ккал."
+                        },
+                        "nutrition": {
+                          "type": "object",
+                          "required": [
+                            "calories",
+                            "proteins",
+                            "fats",
+                            "carbohydrates"
+                          ],
+                          "properties": {
+                            "calories": {
+                              "type": "number"
+                            },
+                            "proteins": {
+                              "type": "number"
+                            },
+                            "fats": {
+                              "type": "number"
+                            },
+                            "carbohydrates": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "cookingTime": {
+                          "type": "number",
+                          "description": "Время готовки, мин."
+                        },
+                        "instructions": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "photo": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Ссылка на фотографию."
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "recipe": {
+                    "name": "Овсяная каша с ягодами",
+                    "ingredients": [
+                      {
+                        "name": "Овсяные хлопья",
+                        "quantity": 200,
+                        "unit": "г"
+                      },
+                      {
+                        "name": "Молоко",
+                        "quantity": 500,
+                        "unit": "мл"
+                      },
+                      {
+                        "name": "Ягоды",
+                        "quantity": 150,
+                        "unit": "г"
+                      }
+                    ],
+                    "calories": 320,
+                    "nutrition": {
+                      "calories": 320,
+                      "proteins": 12,
+                      "fats": 8,
+                      "carbohydrates": 50
+                    },
+                    "cookingTime": 15,
+                    "instructions": [
+                      "Вскипятить молоко.",
+                      "Добавить овсяные хлопья и варить 5 минут.",
+                      "Добавить ягоды и подать."
+                    ],
+                    "photo": "https://example.com/photos/oatmeal.jpg",
+                    "recipeId": "00000000-0000-4000-8000-000000000004"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса. Передай `recipeId` в формате UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": {
+                      "fields": [
+                        {
+                          "loc": [
+                            "body",
+                            "recipeId"
+                          ],
+                          "type": "uuid_parsing"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Идентификатор задачи некорректен, готовое меню для неё не найдено или в меню нет указанного рецепта.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Generation task or recipe not found",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Замена завершилась ошибкой или истёк срок ожидания MS-4.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profile/parameters": {
+      "get": {
+        "summary": "Сохранённые параметры генерации",
+        "description": "Возвращает параметры последней успешной генерации текущего пользователя для предзаполнения формы: `habits`, `diet`, `allergies`, `kitchenTools`. Это параметры самой свежей его задачи в статусе `done` (по времени создания); задачи в обработке и с ошибкой не учитываются, новая успешная генерация заменяет прежний результат. `peopleCount` и `weeklyBudget` не сохраняются. Если готовых генераций ещё нет, отвечает 200 с пустыми списками и `diet: null`. Параметры чужих пользователей недоступны. Токен обязателен: `Authorization: Bearer <jwt>`.",
+        "responses": {
+          "200": {
+            "description": "Сохранённые параметры или пустой ответ, если готовых генераций нет.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "habits",
+                    "diet",
+                    "allergies",
+                    "kitchenTools"
+                  ],
+                  "properties": {
+                    "habits": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "ID привычек по возрастанию."
+                    },
+                    "diet": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "ID диеты или null."
+                    },
+                    "allergies": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "ID аллергенов по возрастанию."
+                    },
+                    "kitchenTools": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "ID кухонной техники по возрастанию."
+                    }
+                  }
+                },
+                "examples": {
+                  "saved": {
+                    "summary": "Параметры сохранены",
+                    "value": {
+                      "habits": [
+                        3,
+                        5
+                      ],
+                      "diet": 4,
+                      "allergies": [
+                        1,
+                        2
+                      ],
+                      "kitchenTools": [
+                        1,
+                        2,
+                        6
+                      ]
+                    }
+                  },
+                  "empty": {
+                    "summary": "Готовых генераций ещё нет",
+                    "value": {
+                      "habits": [],
+                      "diet": null,
+                      "allergies": [],
+                      "kitchenTools": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат) или отозван через `POST /auth/logout`. Причина в ответе не раскрывается. В ответе `WWW-Authenticate: Bearer`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса (например, недоступна база данных).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profile/menus": {
+      "get": {
+        "summary": "История меню пользователя (API-22)",
+        "description": "Возвращает готовые меню пользователя, указанного в токене. Меню отсортированы по убыванию времени создания задачи, при равном времени — по убыванию UUID задачи. В составе меню отображаются текущие рецепты с учётом замен. При отсутствии готовых меню список пуст. Рецепты содержат сохранённые КБЖУ одной порции в `nutrition`; основная калорийность — `nutrition.calories`.\n\nНужен `Authorization: Bearer <jwt>`.",
+        "responses": {
+          "200": {
+            "description": "Список готовых меню.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "menus": {
+                      "items": {
+                        "properties": {
+                          "menuId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Menuid",
+                            "description": "UUID сохранённого меню."
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "title": "Createdat",
+                            "description": "Время создания задачи генерации в UTC."
+                          },
+                          "recipes": {
+                            "items": {
+                              "properties": {
+                                "recipeId": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "title": "Recipeid",
+                                  "description": "UUID рецепта."
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "title": "Name",
+                                  "description": "Название блюда."
+                                },
+                                "calories": {
+                                  "type": "number",
+                                  "title": "Calories",
+                                  "description": "Калорийность одной порции, ккал, как её вернула модель. Может расходиться с `nutrition.calories`; основным считайте `nutrition.calories`."
+                                },
+                                "cookingTime": {
+                                  "type": "number",
+                                  "title": "Cookingtime",
+                                  "description": "Время приготовления, минут."
+                                },
+                                "nutrition": {
+                                  "type": "object",
+                                  "required": [
+                                    "calories",
+                                    "proteins",
+                                    "fats",
+                                    "carbohydrates"
+                                  ],
+                                  "properties": {
+                                    "calories": {
+                                      "type": "number",
+                                      "description": "Калорийность одной порции, ккал."
+                                    },
+                                    "proteins": {
+                                      "type": "number",
+                                      "description": "Белки одной порции, г."
+                                    },
+                                    "fats": {
+                                      "type": "number",
+                                      "description": "Жиры одной порции, г."
+                                    },
+                                    "carbohydrates": {
+                                      "type": "number",
+                                      "description": "Углеводы одной порции, г."
+                                    }
+                                  },
+                                  "description": "КБЖУ одной порции."
+                                }
+                              },
+                              "type": "object",
+                              "required": [
+                                "recipeId",
+                                "name",
+                                "calories",
+                                "cookingTime",
+                                "nutrition"
+                              ],
+                              "title": "MenuHistoryRecipeResponse"
+                            },
+                            "type": "array",
+                            "title": "Recipes",
+                            "description": "Текущий состав меню. Порядок рецептов не гарантируется."
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "menuId",
+                          "createdAt",
+                          "recipes"
+                        ],
+                        "title": "MenuHistoryItemResponse"
+                      },
+                      "type": "array",
+                      "title": "Menus",
+                      "description": "Готовые меню пользователя, от новых к старым."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "menus"
+                  ],
+                  "title": "MenuHistoryResponse"
+                },
+                "examples": {
+                  "history": {
+                    "summary": "Есть готовые меню",
+                    "value": {
+                      "menus": [
+                        {
+                          "menuId": "d94d77a7-90f6-46f5-ac10-e9b50545714c",
+                          "createdAt": "2026-11-01T12:00:00Z",
+                          "recipes": [
+                            {
+                              "recipeId": "b1e2c3d4-5678-90ab-cdef-1234567890ab",
+                              "name": "Омлет с томатами",
+                              "calories": 345.5,
+                              "cookingTime": 25,
+                              "nutrition": {
+                                "calories": 340,
+                                "proteins": 20.5,
+                                "fats": 24,
+                                "carbohydrates": 10.5
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "empty": {
+                    "summary": "Готовых меню нет",
+                    "value": {
+                      "menus": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат) или отозван через `POST /auth/logout`. Причина в ответе не раскрывается. В ответе `WWW-Authenticate: Bearer`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "example": "Bearer"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса (например, недоступна база).",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "MS-4 недоступен, оборвал соединение или ответил некорректно. Gateway также возвращает 502, если тело ответа превышает `UPSTREAM_MAX_RESPONSE_BYTES` (по умолчанию 2 МиБ).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "connect": {
+                    "summary": "MS-4 недоступен",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Upstream service is unavailable",
+                        "details": {
+                          "upstream": "recipes",
+                          "reason": "connect"
+                        }
+                      }
+                    }
+                  },
+                  "response_too_large": {
+                    "summary": "Ответ MS-4 превышает лимит размера",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Upstream response exceeds the allowed size",
+                        "details": {
+                          "upstream": "recipes",
+                          "reason": "response_too_large"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/cart": {
+      "post": {
+        "summary": "Собрать корзину для рецепта (API-14)",
+        "description": "Подбирает товары ВкусВилла для ингредиентов сохранённого негостевого рецепта. Поиск выполняется по recipeId. MS-4 передаёт первые 10 реальных кандидатов MCP настроенной Ollama-модели одним пакетом. Модель выбирает до 3 ID на позицию либо отказывается; код проверяет карточку и рассчитывает количество. Пакет ограничен 12 позициями и 6000 байтами UTF-8 промпта, данных и схемы с учётом контекста модели, без обрезки названий. Лимит, занятость, недоступность, таймаут и некорректный ответ модели дают ошибку позиции в HTTP 200. Список включает все ингредиенты, даже если для них не удалось подобрать товар или рассчитать количество. В total входит сумма product.price.current × q по позициям без ошибки. Частичный сбой каталога или истечение бюджета сохраняют уже рассчитанные позиции. Количество округляется вверх до 0,01 кг либо до целых штук. При превышении 40 возвращается q: 40 с предупреждением.\n\nJWT необязателен и не используется для проверки владельца рецепта. Переданный токен проверяется: неверная подпись, истёкший срок, неверный формат или отзыв дают 401. Если Redis недоступен, запрос с корректным токеном обрабатывается как гостевой. Gateway ограничивает частоту вызовов API-14 отдельно и по умолчанию ждёт ответ MS-4 до 40 секунд.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipeId"
+                ],
+                "properties": {
+                  "recipeId": {
+                    "type": "string",
+                    "description": "UUID сохранённого рецепта.",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "example": {
+                "recipeId": "00000000-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Корзина собрана. Полное, частичное или нулевое сопоставление ингредиентов.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "matches",
+                    "total",
+                    "allMatched",
+                    "unmatchedCount"
+                  ],
+                  "properties": {
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "ingredient",
+                          "product",
+                          "q",
+                          "warning",
+                          "error"
+                        ],
+                        "properties": {
+                          "ingredient": {
+                            "type": "object",
+                            "required": [
+                              "name",
+                              "quantity",
+                              "unit"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "Название ингредиента из рецепта."
+                              },
+                              "quantity": {
+                                "type": "number",
+                                "description": "Количество по рецепту."
+                              },
+                              "unit": {
+                                "type": "string",
+                                "description": "Единица измерения из рецепта."
+                              }
+                            }
+                          },
+                          "product": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "required": [
+                              "id",
+                              "name",
+                              "price",
+                              "unit",
+                              "weight"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "description": "Идентификатор товара в каталоге ВкусВилла."
+                              },
+                              "name": {
+                                "type": "string",
+                                "description": "Название товара."
+                              },
+                              "price": {
+                                "type": "object",
+                                "required": [
+                                  "current",
+                                  "currency"
+                                ],
+                                "properties": {
+                                  "current": {
+                                    "type": "number",
+                                    "description": "Текущая цена за единицу продажи.",
+                                    "minimum": 0
+                                  },
+                                  "currency": {
+                                    "type": "string",
+                                    "description": "Валюта цены.",
+                                    "const": "RUB"
+                                  }
+                                }
+                              },
+                              "unit": {
+                                "type": "string",
+                                "description": "Единица продажи товара.",
+                                "enum": [
+                                  "кг",
+                                  "шт"
+                                ]
+                              },
+                              "weight": {
+                                "type": [
+                                  "object",
+                                  "null"
+                                ],
+                                "required": [
+                                  "value",
+                                  "unit"
+                                ],
+                                "properties": {
+                                  "value": {
+                                    "type": "number",
+                                    "description": "Масса товара.",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "unit": {
+                                    "type": "string",
+                                    "description": "Единица массы.",
+                                    "const": "кг"
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "q": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Количество в единицах продажи. null, если количество определить не удалось.",
+                            "maximum": 40
+                          },
+                          "warning": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Предупреждение по позиции или null."
+                          },
+                          "error": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Причина, по которой позиция не вошла в корзину, или null."
+                          }
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "number",
+                      "description": "Стоимость позиций без ошибки.",
+                      "minimum": 0
+                    },
+                    "allMatched": {
+                      "type": "boolean",
+                      "description": "Для всех ингредиентов рассчитаны позиции."
+                    },
+                    "unmatchedCount": {
+                      "type": "integer",
+                      "description": "Количество ингредиентов с ошибкой.",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "examples": {
+                  "complete": {
+                    "summary": "Все позиции рассчитаны",
+                    "value": {
+                      "matches": [
+                        {
+                          "ingredient": {
+                            "name": "Морковь",
+                            "quantity": 700,
+                            "unit": "г"
+                          },
+                          "product": {
+                            "id": 72194,
+                            "name": "Морковь мытая 1,4 кг",
+                            "price": {
+                              "current": 119.9,
+                              "currency": "RUB"
+                            },
+                            "unit": "шт",
+                            "weight": {
+                              "value": 1.4,
+                              "unit": "кг"
+                            }
+                          },
+                          "q": 1,
+                          "warning": null,
+                          "error": null
+                        }
+                      ],
+                      "total": 119.9,
+                      "allMatched": true,
+                      "unmatchedCount": 0
+                    }
+                  },
+                  "partial": {
+                    "summary": "Рассчитана часть позиций",
+                    "value": {
+                      "matches": [
+                        {
+                          "ingredient": {
+                            "name": "Морковь",
+                            "quantity": 150,
+                            "unit": "г"
+                          },
+                          "product": {
+                            "id": 606,
+                            "name": "Морковь",
+                            "price": {
+                              "current": 53,
+                              "currency": "RUB"
+                            },
+                            "unit": "кг",
+                            "weight": null
+                          },
+                          "q": 0.15,
+                          "warning": null,
+                          "error": null
+                        },
+                        {
+                          "ingredient": {
+                            "name": "Мука",
+                            "quantity": 200,
+                            "unit": "г"
+                          },
+                          "product": null,
+                          "q": null,
+                          "warning": null,
+                          "error": "Товар не найден"
+                        }
+                      ],
+                      "total": 7.95,
+                      "allMatched": false,
+                      "unmatchedCount": 1
+                    }
+                  },
+                  "unmatched": {
+                    "summary": "Нет рассчитанных позиций",
+                    "value": {
+                      "matches": [
+                        {
+                          "ingredient": {
+                            "name": "Мука",
+                            "quantity": 200,
+                            "unit": "г"
+                          },
+                          "product": null,
+                          "q": null,
+                          "warning": null,
+                          "error": "Товар не найден"
+                        }
+                      ],
+                      "total": 0,
+                      "allMatched": false,
+                      "unmatchedCount": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса или recipeId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": {
+                      "fields": [
+                        {
+                          "loc": [
+                            "body",
+                            "recipeId"
+                          ],
+                          "type": "uuid_parsing"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Передан недействительный токен. Ответ содержит WWW-Authenticate: Bearer.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Поддерживаемая схема аутентификации.",
+                "schema": {
+                  "type": "string",
+                  "example": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Сохранённый негостевой рецепт с таким UUID не найден.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Recipe not found",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Превышен лимит корзины. По умолчанию клиент может отправить 1 запрос на каждый из маршрутов API-14 и API-16 за окно (CART_RATE_LIMIT_REQUESTS). Общий потолок обоих маршрутов составляет 3 запроса на процесс gateway (CART_RATE_LIMIT_GLOBAL_REQUESTS). Окно задаёт RATE_LIMIT_WINDOW_SECONDS (60 секунд). Лимит можно отключить. Через сколько секунд повторить запрос, указано в Retry-After и в details.retry_after_seconds. Слот возвращается, если запрос заведомо не дошёл до MS-4 (400 от gateway, 413, 502 connect, 503 pool).",
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests, try again later",
+                    "details": {
+                      "retry_after_seconds": 60
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка при сборке корзины.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Каталог ВкусВилла недоступен или исчерпан пул соединений gateway с MS-4 (details.reason = pool).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "catalog": {
+                    "summary": "Каталог ВкусВилла недоступен",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "VkusVill catalog unavailable",
+                        "details": {}
+                      }
+                    }
+                  },
+                  "pool": {
+                    "summary": "Пул соединений gateway исчерпан",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Gateway is overloaded, try again later",
+                        "details": {
+                          "upstream": "recipes",
+                          "reason": "pool"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/cart/link": {
+      "post": {
+        "summary": "Создать ссылку на корзину ВкусВилла (API-16)",
+        "description": "Создаёт одну ссылку на корзину ВкусВилла из переданных позиций. Для каждой позиции можно использовать product.id и q из API-14. Передавайте id как целое JSON-число, q как конечное JSON-число в единицах продажи. Ошибка любой позиции отклоняет весь запрос. Запрос не оформляет заказ. Маршрут доступен без токена. Gateway игнорирует Authorization и X-User-Id. Таймаут чтения gateway по умолчанию составляет 10 секунд, общий дедлайн — 12 секунд.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "items"
+                ],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "q"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 999999999,
+                          "description": "ID товара в каталоге ВкусВилла."
+                        },
+                        "q": {
+                          "type": "number",
+                          "minimum": 0.01,
+                          "maximum": 40,
+                          "description": "Количество в единицах продажи."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "example": {
+                "items": [
+                  {
+                    "id": 12345,
+                    "q": 1
+                  },
+                  {
+                    "id": 67890,
+                    "q": 0.25
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ссылка на корзину ВкусВилла создана.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "link"
+                  ],
+                  "properties": {
+                    "link": {
+                      "type": "string",
+                      "format": "uri",
+                      "description": "Абсолютный HTTPS URL на vkusvill.ru или www.vkusvill.ru."
+                    }
+                  }
+                },
+                "example": {
+                  "link": "https://vkusvill.ru/mobile?basket&share=2557567558"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса или ВкусВилл отклонил позиции. Ошибка относится ко всей корзине.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "ms4_validation": {
+                    "summary": "Некорректное количество",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {
+                          "fields": [
+                            {
+                              "loc": [
+                                "body",
+                                "items",
+                                "0",
+                                "q"
+                              ],
+                              "type": "greater_than_equal"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "ms4_invalid_input": {
+                    "summary": "ВкусВилл отклонил позиции",
+                    "value": {
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "details": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Превышен лимит корзины. По умолчанию клиент может отправить 1 запрос на каждый из маршрутов API-14 и API-16 за окно (CART_RATE_LIMIT_REQUESTS). Общий потолок обоих маршрутов составляет 3 запроса на процесс gateway (CART_RATE_LIMIT_GLOBAL_REQUESTS). Окно задаёт RATE_LIMIT_WINDOW_SECONDS (60 секунд). Лимит можно отключить. Через сколько секунд повторить запрос, указано в Retry-After и в details.retry_after_seconds. Слот возвращается, если запрос заведомо не дошёл до MS-4 (400 от gateway, 413, 502 connect, 503 pool).",
+            "headers": {
+              "Retry-After": {
+                "description": "Через сколько секунд повторить запрос.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests, try again later",
+                    "details": {
+                      "retry_after_seconds": 60
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка при создании ссылки на корзину.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ВкусВилл не смог вернуть ссылку на корзину или исчерпан пул соединений gateway с MS-4 (details.reason = pool).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message",
+                        "details"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "link": {
+                    "summary": "Ссылка на корзину ВкусВилла недоступна",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "VkusVill cart link unavailable",
+                        "details": {}
+                      }
+                    }
+                  },
+                  "pool": {
+                    "summary": "Пул соединений gateway исчерпан",
+                    "value": {
+                      "error": {
+                        "code": "EXTERNAL_SERVICE_ERROR",
+                        "message": "Gateway is overloaded, try again later",
+                        "details": {
+                          "upstream": "recipes",
+                          "reason": "pool"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/{recipe_id}/like": {
+      "post": {
+        "summary": "Поставить лайк рецепту (API-19)",
+        "description": "Сохраняет лайк текущего пользователя. Пользователь может лайкнуть любой существующий рецепт один раз. Нужен `Authorization: Bearer <jwt>`.",
+        "parameters": [
+          {
+            "name": "recipe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "UUID сохранённого рецепта.",
+              "examples": [
+                "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+              ],
+              "format": "uuid",
+              "title": "Recipe Id"
+            },
+            "description": "UUID сохранённого рецепта."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция выполнена.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true,
+                      "title": "Success",
+                      "description": "Операция выполнена."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "success"
+                  ],
+                  "title": "LikeSuccessResponse"
+                },
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат) или отозван через `POST /auth/logout`. Причина в ответе не раскрывается.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "example": "Bearer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Рецепт не найден или UUID некорректен.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Recipe not found",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Пользователь уже лайкнул рецепт.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "CONFLICT",
+                    "message": "Recipe already liked",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса (например, недоступна база).",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Убрать лайк рецепта (API-20)",
+        "description": "Удаляет лайк текущего пользователя. Другие пользователи сохраняют свои лайки на этот рецепт. Нужен `Authorization: Bearer <jwt>`.",
+        "parameters": [
+          {
+            "name": "recipe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "UUID сохранённого рецепта.",
+              "examples": [
+                "b1e2c3d4-5678-90ab-cdef-1234567890ab"
+              ],
+              "format": "uuid",
+              "title": "Recipe Id"
+            },
+            "description": "UUID сохранённого рецепта."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция выполнена.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true,
+                      "title": "Success",
+                      "description": "Операция выполнена."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "success"
+                  ],
+                  "title": "LikeSuccessResponse"
+                },
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат) или отозван через `POST /auth/logout`. Причина в ответе не раскрывается.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "example": "Bearer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "У пользователя нет такого лайка или UUID некорректен.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Recipe like not found",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса (например, недоступна база).",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/liked": {
+      "get": {
+        "summary": "Список понравившихся рецептов (API-21)",
+        "description": "Возвращает карточки рецептов, которые лайкнул текущий пользователь. Сначала идут последние лайки, при равном времени порядок идёт по убыванию UUID рецепта. Если лайков нет, список пуст. Нужен `Authorization: Bearer <jwt>`.",
+        "responses": {
+          "200": {
+            "description": "Список понравившихся рецептов.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "recipes": {
+                      "items": {
+                        "properties": {
+                          "recipeId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Recipeid",
+                            "description": "Идентификатор сохранённого рецепта."
+                          },
+                          "name": {
+                            "type": "string",
+                            "title": "Name",
+                            "description": "Название блюда."
+                          },
+                          "calories": {
+                            "type": "number",
+                            "title": "Calories",
+                            "description": "Калорийность одной порции, ккал, как её вернула модель. Может расходиться с `nutrition.calories`; основным считайте `nutrition.calories`."
+                          },
+                          "nutrition": {
+                            "properties": {
+                              "calories": {
+                                "type": "number",
+                                "title": "Calories",
+                                "description": "Калорийность одной порции, ккал."
+                              },
+                              "proteins": {
+                                "type": "number",
+                                "title": "Proteins",
+                                "description": "Белки одной порции, г."
+                              },
+                              "fats": {
+                                "type": "number",
+                                "title": "Fats",
+                                "description": "Жиры одной порции, г."
+                              },
+                              "carbohydrates": {
+                                "type": "number",
+                                "title": "Carbohydrates",
+                                "description": "Углеводы одной порции, г."
+                              }
+                            },
+                            "type": "object",
+                            "required": [
+                              "calories",
+                              "proteins",
+                              "fats",
+                              "carbohydrates"
+                            ],
+                            "title": "NutritionResponse",
+                            "description": "КБЖУ одной порции."
+                          },
+                          "cookingTime": {
+                            "type": "number",
+                            "title": "Cookingtime",
+                            "description": "Время приготовления, минут."
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "recipeId",
+                          "name",
+                          "calories",
+                          "nutrition",
+                          "cookingTime"
+                        ],
+                        "title": "RecipeCardResponse"
+                      },
+                      "type": "array",
+                      "title": "Recipes",
+                      "description": "Избранные рецепты пользователя, последние лайки первыми."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "recipes"
+                  ],
+                  "title": "LikedRecipesResponse"
+                },
+                "examples": {
+                  "liked": {
+                    "summary": "Есть лайки",
+                    "value": {
+                      "recipes": [
+                        {
+                          "recipeId": "b1e2c3d4-5678-90ab-cdef-1234567890ab",
+                          "name": "Омлет с томатами",
+                          "calories": 345.5,
+                          "nutrition": {
+                            "calories": 345.5,
+                            "proteins": 20,
+                            "fats": 22,
+                            "carbohydrates": 17
+                          },
+                          "cookingTime": 25
+                        }
+                      ]
+                    }
+                  },
+                  "empty": {
+                    "summary": "Лайков нет",
+                    "value": {
+                      "recipes": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен отсутствует, недействителен (подпись, срок, формат) или отозван через `POST /auth/logout`. Причина в ответе не раскрывается.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication token is missing or invalid",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "example": "Bearer"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса (например, недоступна база).",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                    "details": {}
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "title": "Code",
+                          "description": "Машинно-читаемый код ошибки."
+                        },
+                        "message": {
+                          "type": "string",
+                          "title": "Message",
+                          "description": "Описание ошибки на английском, безопасное для показа."
+                        },
+                        "details": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "title": "Details",
+                          "description": "Дополнительные сведения; может быть пустым. Для `VALIDATION_ERROR` — `{\"fields\": [{\"loc\": [\"body\", \"name\"], \"type\": \"missing\"}]}`: `loc` — список строк с местом ошибки, `type` — тип ошибки Pydantic или `unknown_id` (ID нет в справочнике MS-2); значения и тексты исключений не возвращаются."
+                        }
+                      },
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "title": "ErrorBody"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "title": "ErrorResponse",
+                  "example": {
+                    "error": {
+                      "code": "INTERNAL_ERROR",
+                      "details": {},
+                      "message": "Internal server error"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
